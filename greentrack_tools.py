@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-NDVI TOOLS
-A toolbox to analyze multiple-pixel ndvi data, generate interpolated annual ndvi 
-curves and related statistical indicators.
+GREENTRACK TOOLS
+A toolbox to analyze multiple-pixel biomass indicators, generate interpolated annual 
+indicator curves and related statistics.
 
 
 Created on Mon Nov 13 16:38:50 2023
 
 @author: Fabio Oriani, Agroscope, fabio.oriani@agroscope.admin.ch
-
 
 """
 
@@ -17,6 +16,213 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import curve_fit
+from eodal.core.sensors.sentinel2 import Sentinel2
+from scipy.interpolate import interp2d
+import geopandas as gpd
+import os
+import re
+
+
+def purge(target_dir, target_pattern): 
+    """
+    PURGE remove all pattern-matching files
+
+    Parameters
+    ----------
+    target_dir : str
+        directory where the function search RECURSIVELY for files 
+        matching target_pattern
+    
+    target_pattern : str
+        string searched in filenames, all filenames containing it will be 
+        removed
+
+    Returns
+    -------
+    None.
+
+    """
+    
+    for f in os.listdir(target_dir):
+        if re.search(target_pattern, f):
+            os.remove(os.path.join(target_dir, f))
+
+
+
+def make_grid_vec(shp_path,res):
+    """
+    MAKE_GRID_VEC
+    Generate x, y grid vectors for a given polygon shapefile and wanted resolution.
+    The grid is built upon the polygon bounding box in the shapegile crs.
+
+    Parameters
+    ----------
+    shp_fname : str
+        path to the shapefile (.shp or .gpkg) of the input polygon
+    res : int
+        grid resolution compatible with the shapefile crs
+
+    Returns
+    -------
+    tx : 1d array
+        x coordinate vector of the grid 
+    ty : 1d array
+        y coordiante vector of the grid
+
+    """
+    
+    shp = gpd.read_file(shp_path)
+    lef = np.min(shp.bounds.minx)
+    rig = np.max(shp.bounds.maxx)
+    bot = np.min(shp.bounds.miny)
+    top = np.max(shp.bounds.maxy)
+    tx = np.arange(lef, rig, res)
+    
+    if top < bot:
+        res = -res
+        
+    ty = np.arange(bot, top, res)
+    
+    return tx,ty
+
+def scene_to_array(sc,tx,ty):
+   
+    """
+    SCENE_TO_ARRAY
+    
+    Generate an numpy array (image stack) from a given Eodal SceneCollection.
+    The scenes are resampled on a costant coordinate grid allowing pixel analysis.
+    Missing data location are marked as nans.
+
+    Parameters
+    ----------
+    sc : Eodal SceneCollection
+        The given Scene Collection generated from Eodal
+    tx : Float Vector
+        x coordinate vector for the resample grid.
+        ex. tx = numpy.arange(100,150,10) # x coords from 100 to 150 with 10 resolution
+    ty : Float Vector
+        y coordinate vector for the resample grid.
+
+    Returns
+    -------
+    im : float 4D numpy array.
+        Array containing the stack of all scenes.
+        4 dimensions: [x, y, bands, scenes]
+
+    """
+    
+    ts = sc.timestamps # time stamps for each image
+    bands = sc[sc.timestamps[0]].band_names # bands
+    im_size = [len(ty),len(tx)] # image size
+    im = np.empty(np.hstack([im_size,len(bands),len(ts)])) # preallocate matrix
+
+    for i, scene_iterator in enumerate(sc):
+        
+        # REGRID SCENE TO BBOX AND TARGET RESOLUTION
+        scene = scene_iterator[1]        
+        for idx, band_iterator in enumerate(scene):
+            
+            # extract data with masked ones = 0
+            band = band_iterator[1]
+            Gv = np.copy(band.values.data)             
+            Gv[band.values.mask==1]=0
+            
+            #original grid coordinates
+            ny,nx = np.shape(Gv)
+            vx = band.coordinates['x']
+            vy = band.coordinates['y']
+           
+            # create interpolator
+            
+            Gv_no_nans = Gv.copy()
+            Gv_no_nans[np.isnan(Gv)] = 0
+            f = interp2d(vx,vy,Gv_no_nans,kind='linear',fill_value=0)
+            
+            # interpolate band on the target grid
+            Tv = f(tx,ty) #Tv = np.flipud(f(tx,ty))
+            
+             # assign interpolated band [i = scene , b = band]
+            im[:,:,idx,i] = Tv.copy()
+            del Tv
+    
+    return im
+
+def imrisc(im,qmin=1,qmax=99): 
+    """
+    IMRISC
+    Percentile-based 0-1 rescale for multiband images. 
+    Useful for satellite image visualization.
+    
+
+    Parameters
+    ----------
+    im : Float Array
+        The image to rescale, can be multiband on the 3rd dimension
+    qmin : Float Scalar
+        Percentile to set the bottom of the value range e.g. 0.01
+    qmax : Float Scalar
+        Percentile to set the top of the value range e.g. 0.99
+
+    Returns
+    -------Quantile
+    im_out : Float Array
+        Rescaled image
+        
+    EXAMPLE
+    import matplotlib.pyplot as plt
+    
+    # with im being an [x,y,[r,g,b]] image
+    
+    plt.figure()
+    plt.imshow(imrisc(im))
+    
+
+    """
+
+    if len(np.shape(im))==2:
+        band=im.copy()
+        band2=band[~np.isnan(band)]
+        vmin=np.percentile(band2,qmin)
+        vmax=np.percentile(band2,qmax)
+        band[band<vmin]=vmin
+        band[band>vmax]=vmax
+        band=(band-vmin)/(vmax-vmin)
+        im_out=band
+    else:
+        im_out=im.copy()
+        for i in range(np.shape(im)[2]):
+            band=im[:,:,i].copy()
+            band2=band[~np.isnan(band)]
+            vmin=np.percentile(band2,qmin)
+            vmax=np.percentile(band2,qmax)
+            band[band<vmin]=vmin
+            band[band>vmax]=vmax
+            band=(band-vmin)/(vmax-vmin)
+            im_out[:,:,i]=band
+            
+    return im_out
+
+def EVI(blue,red,nir):
+    """
+    EVI
+    
+    Calculates the Enhanced Vegetation Index (EVI) following the formula
+    provided by Huete et al. (2002)
+
+    :param collection:
+        reflectance in the 'blue', 'red' and 'nir_1' channel
+    :returns:
+        EVI values
+    """
+    numerator = nir - red
+    denominator = nir + 6 * red - 7.5 * blue + 1
+    # values larger 1 and smaller -1 might occur (e.g., on artificial
+    # surfaces); here we cut them of
+    evi = 2.5 * (numerator / denominator)
+    evi[evi > 1.0] = 1.0
+    evi[evi < -1.0] = -1.0
+    return evi
 
 def annual_interp(time,data,time_res='doy',lb=0,rb=0,sttt=0,entt=365.25):
     """
