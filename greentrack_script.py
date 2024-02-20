@@ -24,7 +24,7 @@ import re
 import os
 from datetime import datetime as dt 
 from scipy.optimize import curve_fit
-import ndvi_tools as ndt
+import greentrack_tools as gtt
 
 # STAC PROTOCOL SETTINGS: set to False to use a local data archive
 Settings = get_settings()
@@ -35,13 +35,13 @@ Settings.USE_STAC = True
 ## HERE you can create a loop to run all following code for a list of sites (parcels)
 # giving SITE_NAME a different name every loop iteration
 
-SITE_NAME = 'posieux_5' # base name for output files and folder
+SITE_NAME = 'cortone' # base name for output files and folder
 
 # file path of the bounding box (can be geopackage or shapefile with related files)
 bbox_fname = 'data/parcels__posieux_5.gpkg'
 
 # list  of years you want the data for, can also contain one year
-year_list = [2016] # [2016,2017,2018]
+year_list = [2018] # [2016,2017,2018]
 
 # local path where output directory and files are saved
 SAVE_DIR = 'export' # 
@@ -78,26 +78,23 @@ BAND_LIST = [
  
 REUSE_DATA = False
 
-
-
-##############################################################################
-
-#%% USER FUNCTIONS
-
-# remove all pattern-matching files
-def purge(target_dir, target_pattern): 
-    for f in os.listdir(target_dir):
-        if re.search(target_pattern, f):
-            os.remove(os.path.join(target_dir, f))
+# PREPROCESSING FUNCTION - EDIT TO ADD PREPROCESSING TO THE EODAL SCENES
 
 def preprocess_sentinel2_scenes(
-    ds: Sentinel2, # this is a scene, i.e. a RasterCollection object
+    ds: Sentinel2,  # this is an EODAL Sentinel2 scene, 
+                    # i.e. a RasterCollection object
     target_resolution: int, 
     
     # ADD HERE MORE ARGUMENTS (E.G.packages for preprocessing the images) 
     # and add these also in the dictionary below  'scene_modifier_kwargs'
     ) -> Sentinel2:
+    
+    
     """
+    PREPROCESS_SENTINEL2_SCENES
+    
+    Preprocessing module for the EOdal mapper.
+    
     Resample Sentinel-2 scenes and mask clouds, shadows, and snow
     # resample scene
     .resample(inplace=True, target_resolution=target_resolution)
@@ -137,108 +134,8 @@ def preprocess_sentinel2_scenes(
     
     return ds
 
-def scene_to_array(sc,tx,ty):
-    """
-    Generate an numpy array (image stack) from a given Eodal SceneCollection.
-    The scenes are resampled on a costant coordinate grid allowing pixel analysis.
-    Missing data location are marked as nans.
+##############################################################################
 
-    Parameters
-    ----------
-    sc : Eodal SceneCollection
-        The given Scene Collection generated from Eodal
-    tx : Float Vector
-        x coordinate vector for the resample grid.
-        ex. tx = numpy.arange(100,150,10) # x coords from 100 to 150 with 10 resolution
-    ty : Float Vector
-        y coordinate vector for the resample grid.
-
-    Returns
-    -------
-    im : float 4D numpy array.
-        Array containing the stack of all scenes.
-        4 dimensions: [x, y, bands, scenes]
-
-    """
-    
-    ts = sc.timestamps # time stamps for each image
-    bands = sc[sc.timestamps[0]].band_names # bands
-    im_size = [len(ty),len(tx)] # image size
-    im = np.empty(np.hstack([im_size,len(bands),len(ts)])) # preallocate matrix
-
-    for i, scene_iterator in enumerate(sc):
-        
-        # REGRID SCENE TO BBOX AND TARGET RESOLUTION
-        scene = scene_iterator[1]        
-        for idx, band_iterator in enumerate(scene):
-            
-            # extract data with masked ones = 0
-            band = band_iterator[1]
-            Gv = np.copy(band.values.data)             
-            Gv[band.values.mask==1]=0
-            
-            #original grid coordinates
-            ny,nx = np.shape(Gv)
-            vx = band.coordinates['x']
-            vy = band.coordinates['y']
-           
-            # create interpolator
-            
-            Gv_no_nans = Gv.copy()
-            Gv_no_nans[np.isnan(Gv)] = 0
-            f = interp2d(vx,vy,Gv_no_nans,kind='linear',fill_value=0)
-            
-            # interpolate band on the target grid
-            Tv = np.flipud(f(tx,ty))
-            
-             # assign interpolated band [i = scene , b = band]
-            im[:,:,idx,i] = Tv.copy()
-            del Tv
-    
-    return im
-
-def imrisc(im,qmin=1,qmax=99): 
-    """
-    Percentile-based 0-1 rescale for multiband images
-
-    Parameters
-    ----------
-    im : Float Array
-        The image to rescale, can be multiband on the 3rd dimension
-    qmin : Float Scalar
-        Percentile to set the bottom of the value range e.g. 0.01
-    qmax : Float Scalar
-        Percentile to set the top of the value range e.g. 0.99
-
-    Returns
-    -------Quantile
-    im_out : Float Array
-        Rescaled image
-
-    """
-
-    if len(np.shape(im))==2:
-        band=im.copy()
-        band2=band[~np.isnan(band)]
-        vmin=np.percentile(band2,qmin)
-        vmax=np.percentile(band2,qmax)
-        band[band<vmin]=vmin
-        band[band>vmax]=vmax
-        band=(band-vmin)/(vmax-vmin)
-        im_out=band
-    else:
-        im_out=im.copy()
-        for i in range(np.shape(im)[2]):
-            band=im[:,:,i].copy()
-            band2=band[~np.isnan(band)]
-            vmin=np.percentile(band2,qmin)
-            vmax=np.percentile(band2,qmax)
-            band[band<vmin]=vmin
-            band[band>vmax]=vmax
-            band=(band-vmin)/(vmax-vmin)
-            im_out[:,:,i]=band
-            
-    return im_out
 
 #%% LOOP OVER YEARS
 
@@ -286,7 +183,7 @@ for k in range(len(year_list)):
         os.makedirs(OUT_PATH)
     
     # subfolder where sat images and temp data are saved
-    DATA_PATH = OUT_PATH + '/data'
+    DATA_PATH = 'data/' + SITE_NAME + '_' + str(YEAR)
     if not os.path.exists(DATA_PATH):
         os.makedirs(DATA_PATH)
     
@@ -297,6 +194,7 @@ for k in range(len(year_list)):
     CHUNK_SIZE = 30
     date_vec = [time_start]
     date_new = time_start + timedelta(days = CHUNK_SIZE)
+    
     n = 1
     while date_new < time_end and n < 100: # max 100 chunks
         date_vec.append(date_new)
@@ -308,32 +206,21 @@ for k in range(len(year_list)):
     
     #% define target grid based on original bbox (local crs) and target resolution
     
-    shp = gpd.read_file(bbox_fname)
-    lef = np.min(shp.bounds.minx)
-    rig = np.max(shp.bounds.maxx)
-    bot = np.min(shp.bounds.miny)
-    top = np.max(shp.bounds.maxy)
-    
     res = scene_kwargs['scene_modifier_kwargs']['target_resolution']
-    tx = np.arange(lef, rig, res)
-    ty = np.arange(top, bot, -res)
+    tx, ty = gtt.make_grid_vec(bbox_fname,res)
     
     im_date = Series([])
     im_cloud_perc = Series([])
     
     
-    # OW_switch = True # overwrite previous data stored
-    
-    ############################################
-    # RESTART FROM 0 THE DOWNLOAD (COMMENT TO RESUME PREVIOUS DOWNLOAD)
-    
+    # DOWNLOAD DATA    
     
     if REUSE_DATA == False:
         
         # delete old downloaded files
         target_dir = DATA_PATH
         target_pattern = 's2'
-        purge(target_dir, target_pattern)    
+        gtt.purge(target_dir, target_pattern)    
         
         # reset the counter to 0
         n = 0 # data chunk counter
@@ -387,6 +274,7 @@ for k in range(len(year_list)):
             
             # display image headers
             mapper.data
+
             
             if mapper.data is None:
                 
@@ -398,55 +286,64 @@ for k in range(len(year_list)):
             
             for _, scene in mapper.data:
                 
-                # reproject scene    
+                # reproject scene 
+                shp = gpd.read_file(bbox_fname)
                 scene.reproject(inplace=True, target_crs=shp.crs.to_epsg())
                 
             # retrieve band names
             sc = mapper.data
             bands = sc[sc.timestamps[0]].band_names # bands
-        
+            
             # extract and save image dates, cloud percentage, and images
+            # if any data is present
             if not mapper.data.empty:
                 
-                im = scene_to_array(mapper.data,tx,ty)
-                im_date = mapper.metadata['sensing_time']
-                im_cloud_perc = im_cloud_perc
-                
-                # SAVE multiband image as a .npz file
-                np.savez(data_fname,
-                         im_date = im_date, # dates vector
-                         im_cloud_perc = im_cloud_perc, # cloud pecentage vector
-                         bands = bands, # band names
-                         im = im, # images array [x,y,band,scene]
-                         tx = tx, # x coord vector
-                         ty = ty,  # y coord vector
-                         shp = shp # roi shapefile
-                         )
-                
-                im[im==0] = np.nan
-                
-                #% compute NDVI, YOU CAN PUT HERE OTHER INDICES
-                # AND ADD THEM TO THE SAVED IMAGES
-                RED = np.squeeze(im[:,:,np.array(bands)==['B04'],:])
-                NIR = np.squeeze(im[:,:,np.array(bands)==['B08'],:])
-                NDVI = (NIR-RED)/(NIR+RED)
-                
-                # SAVE NDVI image as .npz, SAVE HERE NEW INDICES                
-                np.savez(DATA_PATH + '/s2_ndvi_' + str(n_block) + '_snow.npz',        
-                         im_date = im_date, # dates vector
-                         im_cloud_perc = im_cloud_perc, # cloud pecentage vector
-                         im = NDVI, # images array [x,y,band,scene]
-                         tx = tx, # x coord vector
-                         ty = ty,  # y coord vector
-                         shp = shp # roi shapefile
-                         )
-                
-                n_block = n_block + 1
-                del im, mapper, NDVI, RED, NIR
+                im = gtt.scene_to_array(mapper.data,tx,ty)
+
+                if np.any(im!=0): # if any data is non zero
+                    
+                    im_date = mapper.metadata['sensing_time']
+                    im_cloud_perc = im_cloud_perc
+                    
+                    # SAVE multiband image as a .npz file
+                    np.savez(data_fname,
+                             im_date = im_date, # dates vector
+                             im_cloud_perc = im_cloud_perc, # cloud pecentage vector
+                             bands = bands, # band names
+                             im = im, # images array [x,y,band,scene]
+                             tx = tx, # x coord vector
+                             ty = ty,  # y coord vector
+                             shp = shp # roi shapefile
+                             )
+                    
+                    im[im==0] = np.nan
+                    
+                    #% compute NDVI, YOU CAN PUT HERE OTHER INDICES
+                    # AND ADD THEM TO THE SAVED IMAGES
+                    RED = np.squeeze(im[:,:,np.array(bands)==['B04'],:])
+                    NIR = np.squeeze(im[:,:,np.array(bands)==['B08'],:])
+                    NDVI = (NIR-RED)/(NIR+RED)
+                    
+                    # SAVE NDVI image as .npz, SAVE HERE NEW INDICES                
+                    np.savez(DATA_PATH + '/s2_ndvi_' + str(n_block) + '_snow.npz',        
+                             im_date = im_date, # dates vector
+                             im_cloud_perc = im_cloud_perc, # cloud pecentage vector
+                             im = NDVI, # images array [x,y,band,scene]
+                             tx = tx, # x coord vector
+                             ty = ty,  # y coord vector
+                             shp = shp # roi shapefile
+                             )
+                    
+                    n_block = n_block + 1
+                    
+                    # save block counter
+                    np.save(DATA_PATH + '/block_counter.npy',n_block)
+                    
+                    del im, mapper, NDVI, RED, NIR
                 
         n = n+1 # update counter
         np.save(DATA_PATH + '/counter.npy',n)
-        np.save(DATA_PATH + '/block_counter.npy',n_block)
+
                  
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PREPROCESS %%%%%%%%%%%%%%%%%%%%%%%%
 #% IMPORT GRID FROM FIRST SAT IMAGE CHUNK
@@ -707,7 +604,7 @@ for k in range(len(year_list)):
         plt.subplot(1,1,n)
         
         # ndvi plot
-        qtime,q25,qm,q75 = ndt.annual_plot(ndvi_time,ndvi_data,'tab:green', 'NDVI ' + str(tmp_year),time_res=time_res,f_range=[-0.1,1])
+        qtime,q25,qm,q75 = gtt.annual_plot(ndvi_time,ndvi_data,'tab:green', 'NDVI ' + str(tmp_year),time_res=time_res,f_range=[-0.1,1])
         out_dict['ndvi_time_' + str(tmp_year)] = qtime
         out_dict['ndvi_q25_' + str(tmp_year)] = q25
         out_dict['ndvi_median_' + str(tmp_year)] = qm
@@ -715,36 +612,32 @@ for k in range(len(year_list)):
         out_dict['ndvi_data_time_' + str(tmp_year)] = ndvi_time
         out_dict['ndvi_data_' + str(tmp_year)] = ndvi_data
         
-        # # snow plot
-        # stime,sdata = ndt.snow_plot(t_sno,sno,tmp_year,'tab:blue',stat='mean',lb='data',rb='data',slabel='RSD ' + str(tmp_year))
-        # out_dict['rsd_time_' + str(tmp_year)] = stime
-        # out_dict['rsd_' + str(tmp_year)] = sdata
         
         # greening time
-        gt = ndt.sog(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
+        gt = gtt.sog(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
         plt.plot([gt,gt],[-0.1,0.1],'--',c='tab:green')
         plt.text(gt+1,-0.1,s='SOG',c='tab:green',rotation = 'vertical')
         out_dict['SOG_' + str(tmp_year)] = gt
         
         # browning time
-        bt = ndt.eos(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
+        bt = gtt.eos(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
         plt.plot([bt,bt],[-0.1,0.1],'--',c='tab:brown')
         plt.text(bt+1,-0.1,s='EOS',c='tab:brown',rotation = 'vertical')
         out_dict['EOS_' + str(tmp_year)] = bt
         
         # area under the ndvi curve from greening time
-        aucm = ndt.auc(ndvi_time,ndvi_data,time_res=time_res,envelope=False,sttt=gt,entt=365.25)
+        aucm = gtt.auc(ndvi_time,ndvi_data,time_res=time_res,envelope=False,sttt=gt,entt=365.25)
         plt.text(qtime[180],qm[180]/2,s='AUC = ' + str(aucm)[:5],c='tab:green')
         
         # ndvi growth slope fittend on growing season only (213-th DOY)
-        fp,C = curve_fit(ndt.gomp,
+        fp,C = curve_fit(gtt.gomp,
                           qtime[:213],
                           qm[:213])#,
                           #bounds = ([0,0,0,-0.1],[1,200,10,+0.1]))
         
         sl = fp[2].copy()
         gom_time = np.arange(0,213)
-        gom_data = ndt.gomp(gom_time,*fp)
+        gom_data = gtt.gomp(gom_time,*fp)
         plt.plot(gom_time,gom_data,'--',c='tab:orange',label="Gompertz")
         out_dict['slope_param_' + str(tmp_year)] = sl
     
@@ -752,15 +645,6 @@ for k in range(len(year_list)):
         plt.ylim([-0.15,1.1])
         plt.xlabel('Day of the year (DOY)')
         plt.ylabel('NDVI [-1,1]')
-        
-        # if np.in1d(n,[1,2,3,4,5,6]):
-        #     plt.xlabel(None)
-        #     ax.set_xticklabels([])
-            
-        # if np.in1d(n,[2,3,5,6,8,9]):
-        #     plt.ylabel(None)
-        #     ax.set_yticklabels([])
-        
         
         plt.legend(loc='upper right',prop={'size': 11})
         
@@ -802,7 +686,7 @@ for k in range(len(year_list)):
 
 # # plot
 # h = plt.subplot(1,3,1)
-# ndt.annual_plot(time_sun,ndvi_sun,'r','sun',time_res='doy')
+# gtt.annual_plot(time_sun,ndvi_sun,'r','sun',time_res='doy')
 # #plt.title(verb_labels[vt_list==vt_tmp])
 # if time_res == 'month':
 #     plt.xticks(ticks=np.arange(3,11),labels=['Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'])
