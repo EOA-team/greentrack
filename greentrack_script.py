@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import List
 from pandas import Series #, concat
 import geopandas
-from scipy.interpolate import interp2d
-import re
 import os
 from datetime import datetime as dt 
 from scipy.optimize import curve_fit
@@ -35,13 +33,13 @@ Settings.USE_STAC = True
 ## HERE you can create a loop to run all following code for a list of sites (parcels)
 # giving SITE_NAME a different name every loop iteration
 
-SITE_NAME = 'cortone' # base name for output files and folder
+SITE_NAME = 'posieux' # base name for output files and folder
 
 # file path of the bounding box (can be geopackage or shapefile with related files)
 bbox_fname = 'data/parcels__posieux_5.gpkg'
 
 # list  of years you want the data for, can also contain one year
-year_list = [2018] # [2016,2017,2018]
+year_list = [2016,2017,2018,2019,2020,2021,2022]
 
 # local path where output directory and files are saved
 SAVE_DIR = 'export' # 
@@ -59,9 +57,9 @@ S_NAME = 'sentinel2-msi'
 
 BAND_LIST = [
 # 'B01',
-'B02', # RGB
-'B03',
-'B04',
+'B02', # BLUE
+'B03', # GREEN
+'B04', # RED
 # 'B05',
 # 'B06',
 # 'B07',
@@ -76,7 +74,7 @@ BAND_LIST = [
 # present in SAVE_DIR for SITE_NAME and YEAR. If False all images will be dowloaded
 # from scratch
  
-REUSE_DATA = False
+REUSE_DATA = True # if True, missing data will be freshly downloaded
 
 # PREPROCESSING FUNCTION - EDIT TO ADD PREPROCESSING TO THE EODAL SCENES
 
@@ -236,7 +234,7 @@ for k in range(len(year_list)):
     
     for i in range(n,len(date_vec)-1):
         
-        data_fname = DATA_PATH + '/s2_data_' + str(n_block) + '_snow.npz'
+        data_fname = DATA_PATH + '/s2_data_' + str(n_block) + '.npz'
         
         if REUSE_DATA == False or os.path.exists(data_fname) == False:
         
@@ -318,22 +316,30 @@ for k in range(len(year_list)):
                     
                     im[im==0] = np.nan
                     
-                    #% compute NDVI, YOU CAN PUT HERE OTHER INDICES
+                    # compute NDVI and EVI, YOU CAN PUT HERE OTHER INDICES
                     # AND ADD THEM TO THE SAVED IMAGES
+                    
+                    # red, nir, blue bands for all scenes together
                     RED = np.squeeze(im[:,:,np.array(bands)==['B04'],:])
                     NIR = np.squeeze(im[:,:,np.array(bands)==['B08'],:])
-                    NDVI = (NIR-RED)/(NIR+RED)
+                    BLUE =  np.squeeze(im[:,:,np.array(bands)==['B02'],:])
                     
-                    # SAVE NDVI image as .npz, SAVE HERE NEW INDICES                
-                    np.savez(DATA_PATH + '/s2_ndvi_' + str(n_block) + '_snow.npz',        
+                    # indicators for all scenes together
+                    NDVI = gtt.ndvi(red=RED,nir=NIR)
+                    EVI = gtt.evi(blue=BLUE,red=RED,nir=NIR)
+                    
+                    # SAVE indicator images as .npz, ADD HERE NEW INDICES                
+                    np.savez(DATA_PATH + '/s2_indicators_' + str(n_block) + '.npz',        
                              im_date = im_date, # dates vector
                              im_cloud_perc = im_cloud_perc, # cloud pecentage vector
-                             im = NDVI, # images array [x,y,band,scene]
+                             NDVI = NDVI, # NDVI array [x,y,scene]
+                             EVI = EVI, # EVI array [x,y,scene]
                              tx = tx, # x coord vector
                              ty = ty,  # y coord vector
                              shp = shp # roi shapefile
                              )
                     
+                    # update data block counter
                     n_block = n_block + 1
                     
                     # save block counter
@@ -348,7 +354,7 @@ for k in range(len(year_list)):
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PREPROCESS %%%%%%%%%%%%%%%%%%%%%%%%
 #% IMPORT GRID FROM FIRST SAT IMAGE CHUNK
 
-    variables = np.load(DATA_PATH + '/s2_data_0_snow.npz')
+    variables = np.load(DATA_PATH + '/s2_data_0.npz')
     variables.allow_pickle=True
     locals().update(variables)
     del variables
@@ -377,6 +383,7 @@ for k in range(len(year_list)):
     
     
     mykeys = ['ndvi', # NDVI pixel value
+              'evi', # EVI pixel value
               'date', # original image date
               'data_chunk_n', # data chunk the image belongs to
               'year', # image year
@@ -394,10 +401,10 @@ for k in range(len(year_list)):
               'y'] # y coord
     
     #inizialize dictionarîes for shadow and sun data, dictionary structure is nested [unit][month]
-    ndvi_dict = dict.fromkeys(mykeys)
+    pixel_dict = dict.fromkeys(mykeys)
     
-    for i in ndvi_dict.keys():
-          ndvi_dict[i] = list([])
+    for i in pixel_dict.keys():
+          pixel_dict[i] = list([])
 
 
     #%% EXTRACT NDVI FROM DATA CHUNKS, 
@@ -406,34 +413,35 @@ for k in range(len(year_list)):
     plt.close('all')
     
     # INITIALIZE SAVED DATA (COMMENT TO RESUME PREVIOUS JOB)
-    np.savez(DATA_PATH + '/ndvi_dict_snow.npz',
-              ndvi_dict = ndvi_dict,
+    np.savez(DATA_PATH + '/pixel_dict.npz',
+              pixel_dict = pixel_dict,
               q_tmp = 0, # current data chunk to process, 0 at the beginning 
               )
     
     # RESUME SAVED DATA
-    variables = np.load(DATA_PATH + '/ndvi_dict_snow.npz')
+    variables = np.load(DATA_PATH + '/pixel_dict.npz')
     variables.allow_pickle=True
     locals().update(variables)
     del variables
-    ndvi_dict = ndvi_dict.all()
+    pixel_dict = pixel_dict.all()
     
     # vt_ind = np.in1d(vt_rast,vt_list).reshape(np.shape(vt_rast))
     nblocks = np.load(DATA_PATH + '/block_counter.npy') # final block counter
     
-    for q in range(q_tmp,nblocks): # q_tmp is loaded from ndvi_dict_snow above
+    for q in range(q_tmp,nblocks): # q_tmp is loaded from pixel_dict above
         
         print('processing chunk ' + str(q) + ' of ' + str(nblocks-1))
         # import images chunk    
         # variables = np.load('data/s2_ndvi_' + str(q) + '.npz')
-        variables = np.load(DATA_PATH + '/s2_ndvi_' + str(q) + '_snow.npz')
+        variables = np.load(DATA_PATH + '/s2_indicators_' + str(q) + '.npz')
         variables.allow_pickle=True
         locals().update(variables)
         del variables
         
-        if np.ndim(im)==2:
-            im = im[:,:,None]
-        nim = np.shape(im)[2]
+        if np.ndim(NDVI)==2:
+            NDVI = NDVI[:,:,None]
+            EVI = EVI[:,:,None]
+        nim = np.shape(NDVI)[2]
         
         # skip whole data chunk if there is no image belonging to the month list
         month = []
@@ -458,33 +466,34 @@ for k in range(len(year_list)):
             
             # skip image if there if it contains too few data
             # data_ind = np.logical_and(vt_ind,~np.isnan(im[:,:,i]))
-            data_ind = ~np.isnan(im[:,:,i])
+            data_ind = ~np.isnan(NDVI[:,:,i])
             df = np.sum(data_ind)/len(data_ind.ravel()) # data fraction in the image
             dth = 0.1 # 10% of miniumum data required
             if df < dth:
                 continue
                         
-            ndvi_dict['date'].append([date_tmp]*np.sum(data_ind))
-            ndvi_dict['data_chunk_n'].append([q]*np.sum(data_ind))
-            ndvi_dict['year'].append([date_tmp.year]*np.sum(data_ind))
-            ndvi_dict['month'].append([date_tmp.month]*np.sum(data_ind))
-            ndvi_dict['week'].append([date_tmp.isocalendar()[1]]*np.sum(data_ind))
-            ndvi_dict['doy'].append([date_tmp.timetuple().tm_yday]*np.sum(data_ind))
-            ndvi_dict['ndvi'].append(im[data_ind,i])
-            ndvi_dict['x'].append(xx[data_ind])
-            ndvi_dict['y'].append(yy[data_ind])
+            pixel_dict['date'].append([date_tmp]*np.sum(data_ind))
+            pixel_dict['data_chunk_n'].append([q]*np.sum(data_ind))
+            pixel_dict['year'].append([date_tmp.year]*np.sum(data_ind))
+            pixel_dict['month'].append([date_tmp.month]*np.sum(data_ind))
+            pixel_dict['week'].append([date_tmp.isocalendar()[1]]*np.sum(data_ind))
+            pixel_dict['doy'].append([date_tmp.timetuple().tm_yday]*np.sum(data_ind))
+            pixel_dict['ndvi'].append(NDVI[data_ind,i])
+            pixel_dict['evi'].append(EVI[data_ind,i])
+            pixel_dict['x'].append(xx[data_ind])
+            pixel_dict['y'].append(yy[data_ind])
             
             
         # save data
-        np.savez(DATA_PATH + '/ndvi_dict_snow.npz',
-                 ndvi_dict = ndvi_dict,
+        np.savez(DATA_PATH + '/pixel_dict.npz',
+                 pixel_dict = pixel_dict,
                   q_tmp = q+1, # current data chunk to process, 0 at the beginning 
                   )
     
 
     # UNCOMMENT TO REMOVE THE ORIGINAL IMAGES AFTER PREPROCESSING
-    # os.remove(DATA_PATH + '/s2_ndvi_' + str(q) + '_snow.npz')
-    # os.remove(DATA_PATH + '/s2_data_' + str(q) + '_snow.npz')
+    # os.remove(DATA_PATH + '/s2_ndvi_' + str(q) + '.npz')
+    # os.remove(DATA_PATH + '/s2_data_' + str(q) + '.npz')
     
   
     #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANALYSIS %%%%%%%%%%%%%%%%%%%%%%%%%%% 
@@ -493,25 +502,26 @@ for k in range(len(year_list)):
     #%% LOAD DATA BACK FROM PREPROCESSING
     
     # data dictionary
-    variables = np.load(DATA_PATH + '/ndvi_dict_snow.npz')
+    variables = np.load(DATA_PATH + '/pixel_dict.npz')
     variables.allow_pickle=True
     locals().update(variables)
     del variables
-    os.remove(DATA_PATH + '/ndvi_dict_snow.npz')
-    ndvi_dict = ndvi_dict.all()
+    os.remove(DATA_PATH + '/pixel_dict.npz')
+    pixel_dict = pixel_dict.all()
     
-    date = np.concatenate(ndvi_dict['date'])
-    doy = np.concatenate(ndvi_dict['doy'])
-    month = np.concatenate(ndvi_dict['month'])
-    ndvi = np.concatenate(ndvi_dict['ndvi'])
-    # shadow = np.concatenate(ndvi_dict['shadow'])
-    week = np.concatenate(ndvi_dict['week'])
-    year = np.concatenate(ndvi_dict['year'])
-    # elevation = np.concatenate(ndvi_dict['elevation'])
-    # aspect = np.concatenate(ndvi_dict['aspect'])
-    x = np.concatenate(ndvi_dict['x'])
-    y = np.concatenate(ndvi_dict['y'])
-    dcn = np.concatenate(ndvi_dict['data_chunk_n'])
+    date = np.concatenate(pixel_dict['date'])
+    doy = np.concatenate(pixel_dict['doy'])
+    month = np.concatenate(pixel_dict['month'])
+    ndvi = np.concatenate(pixel_dict['ndvi'])
+    evi = np.concatenate(pixel_dict['evi'])
+    # shadow = np.concatenate(pixel_dict['shadow'])
+    week = np.concatenate(pixel_dict['week'])
+    year = np.concatenate(pixel_dict['year'])
+    # elevation = np.concatenate(pixel_dict['elevation'])
+    # aspect = np.concatenate(pixel_dict['aspect'])
+    x = np.concatenate(pixel_dict['x'])
+    y = np.concatenate(pixel_dict['y'])
+    dcn = np.concatenate(pixel_dict['data_chunk_n'])
     
     
     #%% ANNUAL NDVI CURVE FOR DIFFERENT YEARS
@@ -567,7 +577,7 @@ for k in range(len(year_list)):
     out_dict = dict()
     
     # time vector with given resolution
-    t_tmp = np.concatenate(ndvi_dict[time_res])
+    t_tmp = np.concatenate(pixel_dict[time_res])
     
     # data filters
     data_ind = [True]*len(ndvi)
@@ -598,10 +608,13 @@ for k in range(len(year_list)):
         data_ind_tmp = np.logical_and(data_ind,y_ind)
         ndvi_data = ndvi[data_ind_tmp]
         ndvi_time = t_tmp[data_ind_tmp]
-        
+        evi_data = evi[data_ind_tmp]
+        evi_time = t_tmp[data_ind_tmp]
         
         # PLOT
         plt.subplot(1,1,n)
+
+        ###### NDVI PLOT AND STATS
         
         # ndvi plot
         qtime,q25,qm,q75 = gtt.annual_plot(ndvi_time,ndvi_data,'tab:green', 'NDVI ' + str(tmp_year),time_res=time_res,f_range=[-0.1,1])
@@ -612,39 +625,80 @@ for k in range(len(year_list)):
         out_dict['ndvi_data_time_' + str(tmp_year)] = ndvi_time
         out_dict['ndvi_data_' + str(tmp_year)] = ndvi_data
         
-        
-        # greening time
+        # SOG
         gt = gtt.sog(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
         plt.plot([gt,gt],[-0.1,0.1],'--',c='tab:green')
         plt.text(gt+1,-0.1,s='SOG',c='tab:green',rotation = 'vertical')
-        out_dict['SOG_' + str(tmp_year)] = gt
+        out_dict['ndvi_SOG_' + str(tmp_year)] = gt
         
-        # browning time
+        # EOS
         bt = gtt.eos(ndvi_time,ndvi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
         plt.plot([bt,bt],[-0.1,0.1],'--',c='tab:brown')
         plt.text(bt+1,-0.1,s='EOS',c='tab:brown',rotation = 'vertical')
-        out_dict['EOS_' + str(tmp_year)] = bt
+        out_dict['ndvi_EOS_' + str(tmp_year)] = bt
         
-        # area under the ndvi curve from greening time
+        # area under the ndvi curve from SOG
         aucm = gtt.auc(ndvi_time,ndvi_data,time_res=time_res,envelope=False,sttt=gt,entt=365.25)
         plt.text(qtime[180],qm[180]/2,s='AUC = ' + str(aucm)[:5],c='tab:green')
+        out_dict['ndvi_AUC_' + str(tmp_year)] = aucm
         
         # ndvi growth slope fittend on growing season only (213-th DOY)
         fp,C = curve_fit(gtt.gomp,
                           qtime[:213],
-                          qm[:213])#,
-                          #bounds = ([0,0,0,-0.1],[1,200,10,+0.1]))
+                          qm[:213],
+                          maxfev=100000,
+                          bounds = ([0,0,0,0],[2,360,1,1]))
         
         sl = fp[2].copy()
         gom_time = np.arange(0,213)
         gom_data = gtt.gomp(gom_time,*fp)
         plt.plot(gom_time,gom_data,'--',c='tab:orange',label="Gompertz")
-        out_dict['slope_param_' + str(tmp_year)] = sl
-    
+        out_dict['ndvi_slope' + str(tmp_year)] = sl
+        
+        ###### EVI PLOT AND STATS
+        
+        # evi plot
+        qtime,q25,qm,q75 = gtt.annual_plot(evi_time,evi_data,'tab:blue', 'EVI ' + str(tmp_year),time_res=time_res,f_range=[-0.1,1])
+        out_dict['evi_time_' + str(tmp_year)] = qtime
+        out_dict['evi_q25_' + str(tmp_year)] = q25
+        out_dict['evi_median_' + str(tmp_year)] = qm
+        out_dict['evi_q75_' + str(tmp_year)] = q75
+        out_dict['evi_data_time_' + str(tmp_year)] = evi_time
+        out_dict['evi_data_' + str(tmp_year)] = evi_data
+        
+        # SOG
+        gt = gtt.sog(evi_time,evi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
+        plt.plot([gt,gt],[-0.1,0.1],'--',c='tab:blue')
+        plt.text(gt+1,-0.1,s='SOG',c='tab:blue',rotation = 'vertical')
+        out_dict['evi_SOG_' + str(tmp_year)] = gt
+        
+        # EOS
+        bt = gtt.eos(evi_time,evi_data,time_res='doy',ndvi_th = 0.05,pth=10,envelope=False)
+        plt.plot([bt,bt],[-0.1,0.1],'--',c='tab:brown')
+        plt.text(bt+1,-0.1,s='EOS',c='tab:brown',rotation = 'vertical')
+        out_dict['evi_EOS_' + str(tmp_year)] = bt
+        
+        # area under the ndvi curve from SOG
+        aucm = gtt.auc(evi_time,evi_data,time_res=time_res,envelope=False,sttt=gt,entt=365.25)
+        plt.text(qtime[180],qm[180]/2,s='AUC = ' + str(aucm)[:5],c='tab:blue')
+        
+        # evi growth slope fittend on growing season only (213-th DOY)
+        fp,C = curve_fit(gtt.gomp,
+                          qtime[:213],
+                          qm[:213],
+                          maxfev=100000,
+                          bounds = ([0,0,0,0],[2,360,1,1]))
+        
+        sl = fp[2].copy()
+        gom_time = np.arange(0,213)
+        gom_data = gtt.gomp(gom_time,*fp)
+        plt.plot(gom_time,gom_data,'--',c='tab:purple',label="Gompertz")
+        out_dict['slope_param_' + str(tmp_year)] = sl    
+        
         # graph cosmetics
         plt.ylim([-0.15,1.1])
         plt.xlabel('Day of the year (DOY)')
-        plt.ylabel('NDVI [-1,1]')
+        plt.ylabel('Spectral indicators [-1,1]')
         
         plt.legend(loc='upper right',prop={'size': 11})
         
@@ -724,7 +778,7 @@ for k in range(len(year_list)):
     
 #     # load related data chunk
 
-#     variables = np.load(DATA_PATH + '/s2_ndvi_' + str(dcn_sun[ind].astype('int')) + '_snow.npz')
+#     variables = np.load(DATA_PATH + '/s2_ndvi_' + str(dcn_sun[ind].astype('int')) + '.npz')
 #     variables.allow_pickle=True
 #     globals().update(variables)
 #     del variables
@@ -753,7 +807,7 @@ for k in range(len(year_list)):
 #     plt.tight_layout()
 #     plt.draw()
     
-#     variables = np.load(DATA_PATH + '/s2_data_' + str(dcn_sun[ind].astype('int')) + '_snow.npz')
+#     variables = np.load(DATA_PATH + '/s2_data_' + str(dcn_sun[ind].astype('int')) + '.npz')
 #     variables.allow_pickle=True
 #     globals().update(variables)
 #     del variables

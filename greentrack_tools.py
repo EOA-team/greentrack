@@ -149,6 +149,7 @@ def scene_to_array(sc,tx,ty):
     return im
 
 def imrisc(im,qmin=1,qmax=99): 
+    
     """
     IMRISC
     Percentile-based 0-1 rescale for multiband images. 
@@ -203,28 +204,60 @@ def imrisc(im,qmin=1,qmax=99):
             
     return im_out
 
-def EVI(blue,red,nir):
+def evi(blue,red,nir):
+    
     """
     EVI
     
-    Calculates the Enhanced Vegetation Index (EVI) following the formula
-    provided by Huete et al. (2002)
+    Calculates the Enhanced Vegetation Index (EVI). 
+    Huete et al. (2002) https://doi.org/10.1016/S0034-4257(02)00096-2
 
-    :param collection:
-        reflectance in the 'blue', 'red' and 'nir_1' channel
-    :returns:
-        EVI values
+    Parameters
+    ----------
+    blue, red, nir : n-d numericals
+        blue, red, near-infrared band images or values
+
+    Returns
+    -------
+    im_out : n-d numerical
+        EVI image or value
     """
+    
     numerator = nir - red
-    denominator = nir + 6 * red - 7.5 * blue + 1
-    # values larger 1 and smaller -1 might occur (e.g., on artificial
-    # surfaces); here we cut them of
+    denominator = nir + 6 * red - 7.5 * blue + 1    
     evi = 2.5 * (numerator / denominator)
+    
+    # threshold values outside [-1,1] (artificial surfaces)
     evi[evi > 1.0] = 1.0
     evi[evi < -1.0] = -1.0
+    
     return evi
 
+def ndvi(red,nir):
+    
+    """
+    NDVI
+    
+    Calculates the Normalized Difference Vegetation Index (NDVI).
+    Rouse et al. 1974 https://ntrs.nasa.gov/citations/19740022614
+    
+    Parameters
+    ----------
+    red, nir : n-d numericals
+        blue, red, near-infrared band images or values
+
+    Returns
+    -------
+    im_out : n-d numerical
+        NDVI image or value
+    """
+    
+    ndvi = (nir - red) / (nir + red) 
+    
+    return ndvi
+
 def annual_interp(time,data,time_res='doy',lb=0,rb=0,sttt=0,entt=365.25):
+    
     """
     ANNUAL CURVE INTERPOLATION
     Generates the interpoalted curves for annual data. If more values are present
