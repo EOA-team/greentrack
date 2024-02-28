@@ -36,10 +36,10 @@ Settings.USE_STAC = True
 SITE_NAME = 'posieux' # base name for output files and folder
 
 # file path of the bounding box (can be geopackage or shapefile with related files)
-bbox_fname = 'data/parcels__posieux_5.gpkg'
+bbox_fname = 'data/roi_new.gpkg'
 
 # list  of years you want the data for, can also contain one year
-year_list = [2016,2017,2018,2019,2020,2021,2022]
+year_list = [2022]
 
 # local path where output directory and files are saved
 SAVE_DIR = 'export' # 
@@ -74,7 +74,7 @@ BAND_LIST = [
 # present in SAVE_DIR for SITE_NAME and YEAR. If False all images will be dowloaded
 # from scratch
  
-REUSE_DATA = True # if True, missing data will be freshly downloaded
+REUSE_DATA = False # if True, missing data will be freshly downloaded
 
 # PREPROCESSING FUNCTION - EDIT TO ADD PREPROCESSING TO THE EODAL SCENES
 
@@ -419,6 +419,7 @@ for k in range(len(year_list)):
               )
     
     # RESUME SAVED DATA
+    q_tmp = []
     variables = np.load(DATA_PATH + '/pixel_dict.npz')
     variables.allow_pickle=True
     locals().update(variables)
@@ -506,7 +507,6 @@ for k in range(len(year_list)):
     variables.allow_pickle=True
     locals().update(variables)
     del variables
-    os.remove(DATA_PATH + '/pixel_dict.npz')
     pixel_dict = pixel_dict.all()
     
     date = np.concatenate(pixel_dict['date'])
@@ -714,120 +714,3 @@ for k in range(len(year_list)):
     np.savez(fname,
               out_dict = out_dict,
               )
-
-
-# # %% INTERACTIVE NDVI CURVE TO VISUALIZE IMAGES BY CLICKING THE NDVI CURVE
-
-
-# ### params
-# time_res= 'doy' #  year, month, week, doy
-# year_tmp = 2016 # to group years: np.array([[2016,2017],[2022,2023]])
-# ###
-
-# #sun_ind = shadow==0 # sun indicator
-# #asp_ind = np.logical_and(aspect > alb, aspect < aub)
-
-# f=plt.figure(figsize=[17.03,  6.8 ]) # f.get_size_inches()
-# data_ind = np.in1d(year,year_tmp) # unit and year indicators
-# #data_ind = np.logical_and(data_ind,unit==vt_tmp) # unit and year indicators
-# #data_ind = np.logical_and(data_ind,shadow==0) # sun indicator
-# #data_ind = np.logical_and(data_ind,asp_ind)
-# #data_ind = np.logical_and(data_ind,excl_ind)
-# ndvi_sun = ndvi[data_ind]
-# time_sun = doy[data_ind]
-# dcn_sun = dcn[data_ind]
-# date_sun = date[data_ind]
-
-# # plot
-# h = plt.subplot(1,3,1)
-# gtt.annual_plot(time_sun,ndvi_sun,'r','sun',time_res='doy')
-# #plt.title(verb_labels[vt_list==vt_tmp])
-# if time_res == 'month':
-#     plt.xticks(ticks=np.arange(3,11),labels=['Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'])
-# plt.ylim([-0.15,1.1])
-# plt.xlabel(time_res + ' number')#plt.xlabel('week number')
-# plt.ylabel('NDVI [-1,1]')
-# #f.text(0.05,0.97,str(i),fontsize=16,weight='bold')        
-# plt.tight_layout()
-# global h2
-# h2 = plt.subplot(1,3,2)
-# pcm = h2.imshow(np.empty([10,10])*np.nan,vmin=-0.1,vmax=0.8)
-# h2.set_xticks([],[])
-# h2.set_yticks([],[])
-# #plt.colorbar(pcm,ax=h2,orientation='horizontal')
-# global h3
-# h3 = plt.subplot(1,3,3)
-# pcm = h3.imshow(np.empty([10,10])*np.nan,vmin=-0.1,vmax=0.8)
-# h3.set_xticks([],[])
-# h3.set_yticks([],[])
-# #plt.colorbar(pcm,ax=h3)
-    
-# # DEFINE CALLBACK FUNCTIONS
-# def onclick(event):
-#     global ix, iy, ni 
-#     ix, iy = event.xdata, event.ydata
-#     dx=(ix-time_sun)/np.std(time_sun) 
-#     dy=(iy-ndvi_sun)/np.std(ndvi_sun)
-#     D=np.sqrt(dx**2+dy**2)
-#     ind=np.argmin(D)
-#     print((time_sun[ind],ndvi_sun[ind]))
-    
-#     # detect the point in the plot and map
-#     h.scatter(time_sun[ind],ndvi_sun[ind],marker='+',s=100,c='k') 
-#     plt.draw()
-    
-#     # load related data chunk
-
-#     variables = np.load(DATA_PATH + '/s2_ndvi_' + str(dcn_sun[ind].astype('int')) + '.npz')
-#     variables.allow_pickle=True
-#     globals().update(variables)
-#     del variables
-    
-#     for j in range(len(im_date)):
-#         print(j)
-#         if date_sun[ind] == dt.strptime(str(im_date[j])[:19],'%Y-%m-%d %H:%M:%S'):
-#             print('image found!')
-#             print('point date ' + str(date_sun[ind]))
-#             print('found date ' + str(im_date[j])[:19])
-#             break
-    
-#     print('j = ' + str(j) + ' data_chunk = ' + str(dcn_sun[ind]))
-#     #h2 = plt.subplot(1,2,2)
-#     h2.clear()
-#     plt.draw()
-#     if im.ndim==2:
-#         h2.imshow(np.squeeze(im),vmin=-0.1,vmax=0.8,interpolation='None')
-#         #data_ind = np.logical_and(~np.isnan(im),~npvar2 = tk.IntVar().isnan(vt_rast))
-#         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
-#     else:
-#         h2.imshow(np.squeeze(im[:,:,j]),vmin=-0.1,vmax=0.8,interpolation='None')
-#         #data_ind = np.logical_and(~np.isnan(im[:,:,j]),~np.isnan(vt_rast))
-#         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
-#     h2.set_title('ndvi ' + str(im_date[j])) # + '\n data fraction = ' + str(df)))
-#     plt.tight_layout()
-#     plt.draw()
-    
-#     variables = np.load(DATA_PATH + '/s2_data_' + str(dcn_sun[ind].astype('int')) + '.npz')
-#     variables.allow_pickle=True
-#     globals().update(variables)
-#     del variables
-    
-#     h3.clear()
-#     plt.draw()
-#     if im.ndim==2:
-#         h3.imshow(imrisc(np.squeeze(im[:,:,[2,1,0],:]),2,98),interpolation='None')
-#     else:
-#         h3.imshow(imrisc(np.squeeze(im[:,:,[2,1,0],j]),2,98),interpolation='None')
-#     h3.set_title('RGB')
-#     plt.tight_layout()
-#     plt.draw()
-
-# def onclose(event): # on figure close do..
-#     # disconnect listening functions
-#     f.canvas.mpl_disconnect(cid)
-#     f.canvas.mpl_disconnect(cid2)
-#     print('figure closed')
-
-# # CONNECT LISTENING FUNCTIONS TO FIGURE
-# cid = f.canvas.mpl_connect('button_press_event', onclick)
-# cid2 = f.canvas.mpl_connect('close_event', onclose)
