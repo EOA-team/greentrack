@@ -1,16 +1,15 @@
 # GreenTrack
-Script to download Sentinel-2 images for a given shapefile (.shp or .gpkg), project on a regular grid, and compute annual curves of biomass indicators.
-Sentinel-2 acquisition is based on EOdal (https://github.com/EOA-team/eodal).
+Collection of scripts to download Sentinel-2 and SwissAlti3D images for a given shapefile (.shp or .gpkg) and compute annual curves of biomass indicators.
+The tools section also contain general-purpose functions for vector and raster data. Sentinel-2 acquisition is based on EOdal (https://github.com/EOA-team/eodal).
 
 ![Alt text](GreenTrack.drawio.png)
 
 ### Content
 <ul>
-  <li>greentrack_script: main program to edit according to your needs</li>
-  <li>greentrack_tools: collection of related functions</li>
+  <li> greentrack_tools: collection of related functions (see the function help for more info) </li>
+  <li> greentrack_script: download the Sentinel-2 images and generate the growth curves </li>
+  <li> greentrack_interactive: after having run greentrack_script, this scrupt allows visualizing clickable growth curves and related images interactively </li>
 </ul> 
-
-
 
 ### Dependences
 See the .py files headers

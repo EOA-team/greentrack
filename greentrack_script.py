@@ -224,7 +224,7 @@ for k in range(len(year_list)):
         n = 0 # data chunk counter
         np.save(DATA_PATH + '/counter.npy',n)
         n_block = 0 # saved data chunk counter (a dedicated one because empty chunks are skipped)
-        np.save(DATA_PATH + '/block_counter.npy',n)
+        np.save(DATA_PATH + '/block_counter.npy',n_block)
     
     
     ############################################
@@ -350,6 +350,9 @@ for k in range(len(year_list)):
         n = n+1 # update counter
         np.save(DATA_PATH + '/counter.npy',n)
 
+    # IF ALL PIXELS ARE ZERO IN ALL IMAGES, NO IMAGE IS SAVED
+    if n_block == 0:
+       raise Exception("All found images contain only cloudy or zero (no data) pixels. Try changing the ROI polygon, the cloud-filter parameter, or the target year")
                  
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PREPROCESS %%%%%%%%%%%%%%%%%%%%%%%%
 #% IMPORT GRID FROM FIRST SAT IMAGE CHUNK
