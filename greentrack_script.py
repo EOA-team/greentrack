@@ -114,7 +114,7 @@ def preprocess_sentinel2_scenes(
     		resampled, cloud-masked Sentinel-2 scene.
 	"""
     
-    # resample scene
+    # resample scene (necessary for uniform all bands resolution)
     ds.resample(inplace=True, target_resolution=target_resolution) 
     
     # mask clouds, shadows, but leave snow (class 11), see page 304 https://sentinel.esa.int/documents/247904/685211/sentinel-2-products-specification-document
@@ -172,7 +172,7 @@ for k in range(len(year_list)):
         'scene_constructor': Sentinel2.from_safe,
         'scene_constructor_kwargs': {'band_selection': BAND_LIST},
         'scene_modifier': preprocess_sentinel2_scenes,
-        'scene_modifier_kwargs': {'target_resolution': res}
+        'scene_modifier_kwargs': {'target_resolution': 10} # keep standard 10m res here
     }
         
     feature = Feature.from_geoseries(gpd.read_file(geom).geometry)
