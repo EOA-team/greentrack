@@ -47,6 +47,10 @@ SAVE_DIR = 'export' #
 # coudy pixel percentage to discard sentinel tiles
 CLOUD_TH = 30
 
+# target image resolution: the unit must be compatible with the shapefile crs
+# usually meters if planar (ex. EPGS:2025 LV95 for Switzerland) or degrees if geodetic (ex. WGS84)
+res = 10
+
 # sentinel product name
 S_NAME = 'sentinel2-msi'
 
@@ -168,7 +172,7 @@ for k in range(len(year_list)):
         'scene_constructor': Sentinel2.from_safe,
         'scene_constructor_kwargs': {'band_selection': BAND_LIST},
         'scene_modifier': preprocess_sentinel2_scenes,
-        'scene_modifier_kwargs': {'target_resolution': 10}
+        'scene_modifier_kwargs': {'target_resolution': res}
     }
         
     feature = Feature.from_geoseries(gpd.read_file(geom).geometry)
@@ -204,7 +208,7 @@ for k in range(len(year_list)):
     
     #% define target grid based on original bbox (local crs) and target resolution
     
-    res = scene_kwargs['scene_modifier_kwargs']['target_resolution']
+    #res = scene_kwargs['scene_modifier_kwargs']['target_resolution']
     tx, ty = gtt.make_grid_vec(bbox_fname,res)
     
     im_date = Series([])
