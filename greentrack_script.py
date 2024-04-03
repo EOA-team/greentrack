@@ -36,7 +36,14 @@ Settings.USE_STAC = True
 SITE_NAME = 'posieux' # base name for output files and folder
 
 # file path of the bounding box (can be geopackage or shapefile with related files)
-bbox_fname = 'data/roi_new.gpkg'
+bbox_fname = 'data/parcels__posieux_5.gpkg'
+
+
+#bbox_fname = '/home/orianif/GEO/software/greentrack/prova.shp'
+
+# write bbox from given shapefile
+#gtt.write_bbox(shp_path, bbox_fname[:-4])
+
 
 # list  of years you want the data for, can also contain one year
 year_list = [2022]
@@ -138,7 +145,13 @@ def preprocess_sentinel2_scenes(
 
 ##############################################################################
 
+#%% DISSOLVE SHEPAFILE IF COMPOSED BY MULTIPLE POLYGONS
 
+poly = gpd.read_file(bbox_fname)
+if  len(poly) > 1:
+    poly.dissolve().convex_hull.to_file('data/ch.gpkg')
+    bbox_fname = 'data/ch.gpkg'
+    
 #%% LOOP OVER YEARS
 
 for k in range(len(year_list)):

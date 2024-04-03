@@ -151,11 +151,11 @@ def onclick(event):
     h2.clear()
     plt.draw()
     if NDVI.ndim==2:
-        h2.imshow(np.squeeze(NDVI),vmin=-0.1,vmax=0.8,interpolation='None')
+        h2.imshow(np.flipud(np.squeeze(NDVI)),vmin=-0.1,vmax=0.8,interpolation='None')
         #data_ind = np.logical_and(~np.isnan(im),~npvar2 = tk.IntVar().isnan(vt_rast))
         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
     else:
-        h2.imshow(np.squeeze(NDVI[:,:,j]),vmin=-0.1,vmax=0.8,interpolation='None')
+        h2.imshow(np.flipud(np.squeeze(NDVI[:,:,j])),vmin=-0.1,vmax=0.8,interpolation='None')
         #data_ind = np.logical_and(~np.isnan(NDVI[:,:,j]),~np.isnan(vt_rast))
         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
     h2.set_title("NDVI") # + '\n data fraction = ' + str(df)))
@@ -166,11 +166,11 @@ def onclick(event):
     h4.clear()
     plt.draw()
     if EVI.ndim==2:
-        h4.imshow(np.squeeze(EVI),vmin=-0.1,vmax=0.8,interpolation='None')
+        h4.imshow(np.flipud(np.squeeze(EVI)),vmin=-0.1,vmax=0.8,interpolation='None')
         #data_ind = np.logical_and(~np.isnan(im),~npvar2 = tk.IntVar().isnan(vt_rast))
         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
     else:
-        h4.imshow(np.squeeze(EVI[:,:,j]),vmin=-0.1,vmax=0.8,interpolation='None')
+        h4.imshow(np.flipud(np.squeeze(EVI[:,:,j])),vmin=-0.1,vmax=0.8,interpolation='None')
     #plt.colorbar()
         #data_ind = np.logical_and(~np.isnan(NDVI[:,:,j]),~np.isnan(vt_rast))
         #df = np.sum(data_ind)/np.sum(~np.isnan(vt_rast)) # data fraction in the image
@@ -186,9 +186,9 @@ def onclick(event):
     h3.clear()
     plt.draw()
     if im.ndim==2:
-        h3.imshow(gtt.imrisc(np.squeeze(im[:,:,[2,1,0]]),2,98),interpolation='None')
+        h3.imshow(gtt.imrisc(np.flipud(np.squeeze(im[:,:,[2,1,0]])),2,98),interpolation='None')
     else:
-        h3.imshow(gtt.imrisc(np.squeeze(im[:,:,[2,1,0],j]),2,98),interpolation='None')
+        h3.imshow(gtt.imrisc(np.flipud(np.squeeze(im[:,:,[2,1,0],j])),2,98),interpolation='None')
     h3.set_title('RGB')
     plt.tight_layout()
     plt.draw()

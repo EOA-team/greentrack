@@ -31,7 +31,7 @@ from rasterio.warp import reproject, calculate_default_transform
 from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.enums import Resampling
-from shapefile import Reader
+#from shapefile import Reader
 import matplotlib.path as mplp
 
 print('PROVA')
@@ -98,7 +98,7 @@ def make_grid_vec(shp_path,res):
     
     return tx, ty
 
-def scene_to_array(sc,tx,ty):
+def scene_to_array(sc,tx,ty,mask=None):
    
     """
     SCENE_TO_ARRAY
@@ -116,6 +116,9 @@ def scene_to_array(sc,tx,ty):
         ex. tx = numpy.arange(100,150,10) # x coords from 100 to 150 with 10 resolution
     ty : Float Vector
         y coordinate vector for the resample grid.
+    
+    mask : np.array of size [ty,tx]
+        if given, pixels valued False or 0 are set to 0 in the output grid.
 
     Returns
     -------
@@ -158,6 +161,10 @@ def scene_to_array(sc,tx,ty):
              # assign interpolated band [i = scene , b = band]
             im[:,:,idx,i] = Tv.copy()
             del Tv
+            
+            # apply mask if given
+            if mask != None:
+                im[~mask] = 0
     
     return im
 
@@ -1114,13 +1121,14 @@ def download_SA3D_STAC(
     )
     
 
-def bbox_from_tif(fname_tif,out_base_path):
+def write_bbox(fpath,out_base_path):
     """
-    Generates a bounding-box shapefile form a given geotiff.
+    Generates a bounding-box shapefile form a given geotiff / shp / gpkg file.
 
     Parameters
     ----------
-    fname_tif : str
+    fpath : str
+        original tif, shp, or gpkg file
     out_base_path : str
         Shapefile output base path (with no extensions, since multiple related
                                     fiels are generated)
@@ -1130,18 +1138,31 @@ def bbox_from_tif(fname_tif,out_base_path):
     None.
     
     """
-    bbox_fname = out_base_path + '.shp'   
-    dataset = rasterio.open(fname_tif)
-    lef = dataset.bounds.left
-    rig = dataset.bounds.right
-    if dataset.bounds.bottom > dataset.bounds.top:
-        top = dataset.bounds.bottom
-        bot = dataset.bounds.top
-    else:
-        bot = dataset.bounds.bottom
-        top = dataset.bounds.top
+    
+    # read original file
+    if  fpath[-3:] == 'tif' or  fpath[-4:] == 'tiff':
+        
+        dataset = rasterio.open(fpath)
+        lef = dataset.bounds.left
+        rig = dataset.bounds.right
+        
+        if dataset.bounds.bottom > dataset.bounds.top:
+            top = dataset.bounds.bottom
+            bot = dataset.bounds.top
+        else:
+            bot = dataset.bounds.bottom
+            top = dataset.bounds.top
+    
+    elif fpath[-3:] == 'shp' or  fpath[-4:] == 'gpkg':
+        
+        dataset = gpd.read_file(fpath)
+        lef = np.min(dataset.bounds.minx)
+        rig = np.max(dataset.bounds.maxx)
+        bot = np.min(dataset.bounds.miny)
+        top = np.max(dataset.bounds.maxy)
     
     # write bbox shapefile
+    bbox_fname = out_base_path + '.shp'
     w = shapefile.Writer(bbox_fname)
     w.field([],'C')
     w.poly([[[lef,bot],[lef,top],[rig,top],[rig,bot]]])
@@ -1194,42 +1215,43 @@ def rasterize_shp(tx:float,
 
     """
     
-    # sf = gpd.read_file(shp_path)
-    # fi_names = np.array(sf.columns)
-    # fi_ind = fi_names == field
-    # fi_re = 
-    
-    # create shapefile object
-    sf = Reader(shp_path,encoding='UTF-8') # specify encoding
-    
-    # retrieve wanted field index to fill the raster
-    fi = np.array(sf.fields) # [field name, type, data length, decimal places]
-    fi_names = fi[:,0] # field names
-    fi_types = fi[:,1] # field types
-    
-    fi_ind = fi_names == field # wanted field index
-    fi_type = fi_types[fi_ind][0] # wanted field type
-    fi_ind = fi_ind[1:] # remove initial field index (deletion flag not present in re)
-    
-    # translate fi_type name into array_type name 
-    fi_type_list = np.array(['C','N','F','L','D'])
-    array_type_list = np.array(['str','float','float','Boolean','str'])
-    array_type = array_type_list[np.in1d(fi_type_list,fi_type)][0]
+    sf = gpd.read_file(shp_path)
+    fi_re = np.array(sf[field])
 
-    # retrieve wanted field records (associated to the shapes, contain all fields for every shape)
-    fi_re = np.array(sf.records())[:,fi_ind].astype(array_type)
     
-    # retrieve shapes
-    sh = np.array(sf.shapes()) # shape
+    # # create shapefile object OLD
+    # sf = Reader(shp_path,encoding='UTF-8') # specify encoding
+    
+    # # retrieve wanted field index to fill the raster
+    # fi = np.array(sf.fields) # [field name, type, data length, decimal places]
+    # fi_names = fi[:,0] # field names
+    # fi_types = fi[:,1] # field types
+    
+    # fi_ind = fi_names == field # wanted field index
+    # fi_type = fi_types[fi_ind][0] # wanted field type
+    # fi_ind = fi_ind[1:] # remove initial field index (deletion flag not present in re)
+    
+    # # translate fi_type name into array_type name 
+    # fi_type_list = np.array(['C','N','F','L','D'])
+    # array_type_list = np.array(['str','float','float','Boolean','str'])
+    # array_type = array_type_list[np.in1d(fi_type_list,fi_type)][0]
+
+    # # retrieve wanted field records (associated to the shapes, contain all fields for every shape)
+    # fi_re = np.array(sf.records())[:,fi_ind].astype(array_type)
+    
+    # # retrieve shapes
+    # sh = np.array(sf.shapes()) # shape
 
     # extract atribute and point vector for every polygon
     shx = []
     shy = []
     for i in range(len(fi_re)):
         # consider only records with non-zero shape 
-        if len(sh[i].points)>0:
-            shx.append(np.array(sh[i].points)[:,0])
-            shy.append(np.array(sh[i].points)[:,1])
+        if len(np.array(sf.geometry[i].boundary.coords.xy[0]))>0:
+            shx.append(np.array(sf.geometry[i].boundary.coords.xy[0]))
+            shy.append(np.array(sf.geometry[i].boundary.coords.xy[1]))
+            # shx.append(np.array(sh[i].points)[:,0])
+            # shy.append(np.array(sh[i].points)[:,1])
 
     shx = np.array(shx)
     shy = np.array(shy)
@@ -1246,3 +1268,44 @@ def rasterize_shp(tx:float,
         print(str(i) + '/' + str(len(fi_re)-1))
     
     return rast
+
+def write_geotiff(filename,im,xmin,ymax,xres,yres,epsg=None,dtype=None,nodata_val=None,band_name=None):
+    
+    # nodata_val, band_name should be lists/array even if containing one value
+    if dtype==None: # set data type from given format
+        dtype=im.dtype.name
+    if np.ndim(im)<3:
+        nb=1
+        im=im[:,:,None]
+    else:
+        nb=np.shape(im)[2]
+    
+    driver =  gdal.GetDriverByName('GTiff') # generate driver    
+    outdata = driver.Create(filename, np.shape(im)[1], np.shape(im)[0], nb, gdal.GetDataTypeByName(dtype))
+    for i in range(nb): # write data
+        if dtype!=None:
+            outdata.GetRasterBand(i+1).WriteArray(im[:,:,i].astype(dtype))
+        else:
+            outdata.GetRasterBand(i+1).WriteArray(im[:,:,i])
+            
+        if nodata_val!=None:
+            outdata.GetRasterBand(i+1).SetNoDataValue(nodata_val)
+        
+        if band_name!=None:
+            outdata.GetRasterBand(i+1).SetDescription(band_name[i])
+        
+    # GEOREFERENTIATION
+     # coords
+    geotransform = (xmin, # x-coordinate of the upper-left corner of the upper-left pixel.
+                    xres, # W-E pixel resolution / pixel width.
+                    0, #row rotation (typically zero).
+                    ymax, # y-coordinate of the upper-left corner of the upper-left pixel.
+                    0, # column rotation (typically zero).
+                    -yres) # N-S pixel resolution / pixel height (negative value for a north-up image).
+    outdata.SetGeoTransform(geotransform)    # specify coords
+    srs = osr.SpatialReference()            # establish encoding
+    srs.ImportFromEPSG(epsg)                # set CRS from EPSG code 
+    outdata.SetProjection(srs.ExportToWkt())
+    # save data
+    outdata.FlushCache()
+    outdata=None
