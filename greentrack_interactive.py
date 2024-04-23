@@ -6,8 +6,6 @@ Created on Tue Feb 27 11:50:12 2024
 @author: Fabio Oriani, Agroscope, fabio.oriani@agroscope.admin.ch
 """
 
-
-
 #%% INTERACTIVE NDVI CURVE TO VISUALIZE IMAGES BY CLICKING THE NDVI CURVE
 
 import numpy as np
@@ -21,7 +19,7 @@ import greentrack_tools as gtt
 import os
 
 ### params
-SITE_NAME = "posieux"
+SITE_NAME = "test"
 time_res= 'doy' #  year, month, week, doy
 YEAR = 2022 # to group years: np.array([[2016,2017],[2022,2023]])
 ###

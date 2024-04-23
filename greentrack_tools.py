@@ -23,6 +23,7 @@ import os
 import re
 import rasterio
 import shapefile
+from osgeo.gdal import GetDriverByName, GetDataTypeByName
 from osgeo import osr
 import geopandas
 import json
@@ -98,7 +99,7 @@ def make_grid_vec(shp_path,res):
     
     return tx, ty
 
-def scene_to_array(sc,tx,ty,mask=None):
+def scene_to_array(sc,tx,ty,mask=None,no_data=0):
    
     """
     SCENE_TO_ARRAY
@@ -118,7 +119,10 @@ def scene_to_array(sc,tx,ty,mask=None):
         y coordinate vector for the resample grid.
     
     mask : np.array of size [ty,tx]
-        if given, pixels valued False or 0 are set to 0 in the output grid.
+        if given, pixels valued False or 0 are set to no_data in the output grid.
+    
+    no_data : int or nan
+        value for missing data in the grid
 
     Returns
     -------
@@ -153,7 +157,7 @@ def scene_to_array(sc,tx,ty,mask=None):
             
             Gv_no_nans = Gv.copy()
             Gv_no_nans[np.isnan(Gv)] = 0
-            f = interp2d(vx,vy,Gv_no_nans,kind='linear',fill_value=0)
+            f = interp2d(vx,vy,Gv_no_nans,kind='linear',fill_value=no_data)
             
             # interpolate band on the target grid
             Tv = f(tx,ty) #Tv = np.flipud(f(tx,ty))
@@ -162,9 +166,9 @@ def scene_to_array(sc,tx,ty,mask=None):
             im[:,:,idx,i] = Tv.copy()
             del Tv
             
-            # apply mask if given
-            if mask != None:
-                im[~mask] = 0
+    # apply mask if given
+    if mask is not None:
+        im[np.logical_not(mask),:,:] = no_data
     
     return im
 
@@ -1182,7 +1186,7 @@ def write_bbox(fpath,out_base_path):
 def rasterize_shp(tx:float,
                   ty:float,
                   shp_path:str,
-                  field:str,
+                  field:str = '1',
                   no_data = 0):
     """
     RASTERIZE SHP project a polygon shapefile on a raster defined by the coord
@@ -1200,8 +1204,8 @@ def rasterize_shp(tx:float,
         name of the field to give as value of the raster. 
         avasilable field can be see with:
         
-        sf = Reader(shp_path,encoding='UTF-8') # read shape
-        fi_names = fi[:,0] # field names
+        sf = gpd.read_file(shp_path) # read shape
+        sf.columns # field names
         
     no_data : numerical or object
         no data value in the raster. Default is 0
@@ -1215,8 +1219,49 @@ def rasterize_shp(tx:float,
 
     """
     
-    sf = gpd.read_file(shp_path)
-    fi_re = np.array(sf[field])
+    
+    # Step 1: Read Shapefile
+    gdf = gpd.read_file(shp_path)
+    
+    # Step 2: Explode MultiPart geometries
+    gdf_exploded = gdf.explode()
+    
+    # Step 3: Access Exploded Geometry
+    geometry = gdf_exploded.geometry
+    
+    # Step 4: Access the geomtery field to populate raster
+    
+    if field == '1': # costant 1s
+        
+        fi_re = np.ones(len(geometry))
+    
+    else: # or wanted field
+    
+        fi_re = np.array(gdf_exploded[field])
+    
+    
+    # Step 5: Extract Coordinates
+    shx = []
+    shy = []
+    
+    for geom in geometry:
+        
+        shx_tmp = []
+        shy_tmp = []
+        
+        for point in geom.exterior.coords:
+            
+            shx_tmp.append(point[0])
+            shy_tmp.append(point[1])
+        
+        shx.append(np.array(shx_tmp))
+        shy.append(np.array(shy_tmp))
+        
+            
+            #x, y = point  # For 2D data (longitude, latitude)
+            # For 3D data (longitude, latitude, elevation), use:
+            # x, y, z = point
+            #print(f"Longitude: {x}, Latitude: {y}")
 
     
     # # create shapefile object OLD
@@ -1242,16 +1287,17 @@ def rasterize_shp(tx:float,
     # # retrieve shapes
     # sh = np.array(sf.shapes()) # shape
 
-    # extract atribute and point vector for every polygon
-    shx = []
-    shy = []
-    for i in range(len(fi_re)):
-        # consider only records with non-zero shape 
-        if len(np.array(sf.geometry[i].boundary.coords.xy[0]))>0:
-            shx.append(np.array(sf.geometry[i].boundary.coords.xy[0]))
-            shy.append(np.array(sf.geometry[i].boundary.coords.xy[1]))
-            # shx.append(np.array(sh[i].points)[:,0])
-            # shy.append(np.array(sh[i].points)[:,1])
+    # # extract atribute and point vector for every polygon
+    # shx = []
+    # shy = []
+    # for i in range(len(fi_re)):
+       
+    #     # consider only records with non-zero shape 
+    #     if len(np.array(sf.geometry[i].boundary.coords.xy[0]))>0:
+    #         shx.append(np.array(sf.geometry[i].boundary.coords.xy[0]))
+    #         shy.append(np.array(sf.geometry[i].boundary.coords.xy[1]))
+    #         # shx.append(np.array(sh[i].points)[:,0])
+    #         # shy.append(np.array(sh[i].points)[:,1])
 
     shx = np.array(shx)
     shy = np.array(shy)
@@ -1261,11 +1307,12 @@ def rasterize_shp(tx:float,
     rast = np.zeros_like(xx)
     rast[:] = no_data
     points = np.array((xx.flatten(), yy.flatten())).T
-    for i in range(len(fi_re)):
+    
+    for i in range(len(geometry)):
         mpath = mplp.Path(np.hstack((shx[i][:,None],shy[i][:,None])))
         mask = mpath.contains_points(points).reshape(xx.shape)
         rast[mask] = fi_re[i]
-        print(str(i) + '/' + str(len(fi_re)-1))
+        print('raterizing shape ' + str(i) + '/' + str(len(fi_re)-1))
     
     return rast
 
@@ -1280,8 +1327,8 @@ def write_geotiff(filename,im,xmin,ymax,xres,yres,epsg=None,dtype=None,nodata_va
     else:
         nb=np.shape(im)[2]
     
-    driver =  gdal.GetDriverByName('GTiff') # generate driver    
-    outdata = driver.Create(filename, np.shape(im)[1], np.shape(im)[0], nb, gdal.GetDataTypeByName(dtype))
+    driver =  GetDriverByName('GTiff') # generate driver    
+    outdata = driver.Create(filename, np.shape(im)[1], np.shape(im)[0], nb, GetDataTypeByName(dtype))
     for i in range(nb): # write data
         if dtype!=None:
             outdata.GetRasterBand(i+1).WriteArray(im[:,:,i].astype(dtype))

@@ -18,6 +18,7 @@ from eodal.mapper.mapper import Mapper, MapperConfigs
 from pathlib import Path
 from typing import List
 from pandas import Series #, concat
+#import pandas as pd
 import geopandas
 import os
 from datetime import datetime as dt 
@@ -28,28 +29,23 @@ import greentrack_tools as gtt
 Settings = get_settings()
 Settings.USE_STAC = True
 
-#%% INPUT PARAMS
+#%%  INPUT PARAMS  ###########################################################
+
 
 ## HERE you can create a loop to run all following code for a list of sites (parcels)
 # giving SITE_NAME a different name every loop iteration
 
-SITE_NAME = 'posieux' # base name for output files and folder
+SITE_NAME = 'test' # base name for output files and folder
 
-# file path of the bounding box (can be geopackage or shapefile with related files)
-bbox_fname = 'data/parcels__posieux_5.gpkg'
-
-
-#bbox_fname = '/home/orianif/GEO/software/greentrack/prova.shp'
-
-# write bbox from given shapefile
-#gtt.write_bbox(shp_path, bbox_fname[:-4])
-
+# shapefile path of the ROI (.gpkg or .shp)
+shp_path = 'data/parcels__posieux_5.gpkg'
+bbox_fname = shp_path
 
 # list  of years you want the data for, can also contain one year
 year_list = [2022]
 
 # local path where output directory and files are saved
-SAVE_DIR = 'export' # 
+SAVE_DIR = 'export'  
 
 # coudy pixel percentage to discard sentinel tiles
 CLOUD_TH = 30
@@ -145,12 +141,23 @@ def preprocess_sentinel2_scenes(
 
 ##############################################################################
 
-#%% DISSOLVE SHEPAFILE IF COMPOSED BY MULTIPLE POLYGONS
+#%% TARGET GRID AND TREAT MULTI POLYGON ROI
 
+# target grid (accepts exploded shapefiles)
+tx, ty = gtt.make_grid_vec(bbox_fname,res)
+
+# if ROI is multi-polygons make a multipolygon 
 poly = gpd.read_file(bbox_fname)
+
 if  len(poly) > 1:
-    poly.dissolve().convex_hull.to_file('data/ch.gpkg')
-    bbox_fname = 'data/ch.gpkg'
+    
+     # if mutlipolygon, use the convex hull as mono-polygon ROI and apply mask later 
+     poly.dissolve().to_file('data/dissolved.shp')
+     bbox_fname = 'data/dissolved.shp'
+    
+# mask for original polygons to apply later
+mask = gtt.rasterize_shp(tx,ty,shp_path,'1',no_data=0)
+    
     
 #%% LOOP OVER YEARS
 
@@ -187,9 +194,8 @@ for k in range(len(year_list)):
         'scene_modifier': preprocess_sentinel2_scenes,
         'scene_modifier_kwargs': {'target_resolution': 10} # keep standard 10m res here
     }
-        
-    feature = Feature.from_geoseries(gpd.read_file(geom).geometry)
-    
+      
+
     #% DOWNLOAD THE IMAGES
     
     # path where results are saved
@@ -201,8 +207,6 @@ for k in range(len(year_list)):
     DATA_PATH = 'data/' + SITE_NAME + '_' + str(YEAR)
     if not os.path.exists(DATA_PATH):
         os.makedirs(DATA_PATH)
-    
-        
     
     # split the wanted date range in approx 30-day chuncks to override download limit
     
@@ -216,13 +220,7 @@ for k in range(len(year_list)):
         date_new = date_new + timedelta(days = CHUNK_SIZE)        
         n = n+1
     date_vec.append(time_end)
-    
-    
-    
-    #% define target grid based on original bbox (local crs) and target resolution
-    
-    #res = scene_kwargs['scene_modifier_kwargs']['target_resolution']
-    tx, ty = gtt.make_grid_vec(bbox_fname,res)
+        
     
     im_date = Series([])
     im_cloud_perc = Series([])
@@ -242,10 +240,7 @@ for k in range(len(year_list)):
         np.save(DATA_PATH + '/counter.npy',n)
         n_block = 0 # saved data chunk counter (a dedicated one because empty chunks are skipped)
         np.save(DATA_PATH + '/block_counter.npy',n_block)
-    
-    
-    ############################################
-    
+        
     n = np.load(DATA_PATH + '/counter.npy') # counter to resume from last completed chunk
     n_block = np.load(DATA_PATH + '/block_counter.npy') # counter to resume from last completed chunk
     
@@ -256,6 +251,9 @@ for k in range(len(year_list)):
         if REUSE_DATA == False or os.path.exists(data_fname) == False:
         
             print('DOWNLOADING DATA CHUNK '  + str(i) + ' of ' + str(len(date_vec)-2))
+            
+            feature = Feature.from_geoseries(gpd.read_file(geom).geometry)
+        
             mapper_configs = MapperConfigs(
                  collection = collection,
                  time_start = date_vec[i],
@@ -263,14 +261,15 @@ for k in range(len(year_list)):
                  feature = feature,
                  metadata_filters = metadata_filters
              )
-        
-        
+    
+    
             # Create mapper
             mapper = Mapper(mapper_configs)
            
             try:
+
                 mapper.query_scenes()
-            
+                
             except Exception as e: 
                 
                 # if no images available are found skip to the next data chunk
@@ -283,14 +282,13 @@ for k in range(len(year_list)):
                 else:
                     print(e) 
                     break
-            
+           
             # download the images
             mapper.load_scenes(scene_kwargs=scene_kwargs)
             
             # display image headers
             mapper.data
 
-            
             if mapper.data is None:
                 
                 print('No images found, continuing to the next data chunk')
@@ -313,6 +311,7 @@ for k in range(len(year_list)):
             # if any data is present
             if not mapper.data.empty:
                 
+                # project scenes on the target grid
                 im = gtt.scene_to_array(mapper.data,tx,ty)
 
                 if np.any(im!=0): # if any data is non zero
@@ -371,18 +370,11 @@ for k in range(len(year_list)):
     if n_block == 0:
        raise Exception("All found images contain only cloudy or zero (no data) pixels. Try changing the ROI polygon, the cloud-filter parameter, or the target year")
                  
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PREPROCESS %%%%%%%%%%%%%%%%%%%%%%%%
-#% IMPORT GRID FROM FIRST SAT IMAGE CHUNK
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PREPROCESSING %%%%%%%%%%%%%%%%%%%%%%%%
 
-    variables = np.load(DATA_PATH + '/s2_data_0.npz')
-    variables.allow_pickle=True
-    locals().update(variables)
-    del variables
+    #% DEFINE TARGET GRID
     xx, yy = np.meshgrid(tx,ty,indexing='xy')
-    res = tx[1]-tx[0]
     im_extent = [tx[0]-res/2,tx[-1]+res/2,ty[0]+res/2,ty[-1]-res/2]
-
-
 
 #%% INITIALIZE DATABASE AS DICTIONARY
 # # BASIC DICTIONARY STRUCTURE: EXA503MPLE
@@ -400,7 +392,6 @@ for k in range(len(year_list)):
 #
 
     m_list = np.arange(1,13) # months list now including winter
-    
     
     mykeys = ['ndvi', # NDVI pixel value
               'evi', # EVI pixel value
@@ -488,7 +479,8 @@ for k in range(len(year_list)):
             # skip image if there if it contains too few data
             # data_ind = np.logical_and(vt_ind,~np.isnan(im[:,:,i]))
             data_ind = ~np.isnan(NDVI[:,:,i])
-            df = np.sum(data_ind)/len(data_ind.ravel()) # data fraction in the image
+            #df = np.sum(data_ind)/len(data_ind.ravel()) # data fraction in the image
+            df = np.sum(data_ind)/np.sum(mask) # data fraction in the image
             dth = 0.1 # 10% of miniumum data required
             if df < dth:
                 continue
@@ -517,10 +509,9 @@ for k in range(len(year_list)):
     # os.remove(DATA_PATH + '/s2_data_' + str(q) + '.npz')
     
   
-    #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANALYSIS %%%%%%%%%%%%%%%%%%%%%%%%%%% 
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANALYSIS %%%%%%%%%%%%%%%%%%%%%%%%%%% 
     
-    
-    #%% LOAD DATA BACK FROM PREPROCESSING
+    # LOAD DATA BACK FROM PREPROCESSING
     
     # data dictionary
     variables = np.load(DATA_PATH + '/pixel_dict.npz')
@@ -545,9 +536,7 @@ for k in range(len(year_list)):
     
     
     #%% ANNUAL NDVI CURVE FOR DIFFERENT YEARS
-    
-    ### INPUT PARAMS ########################################################
-    
+        
     # years to generate the ndvi annual curves (one curve per year)
     selected_years = [YEAR] #np.arange(2016,2024) # chosen dry/wet years 
     time_res = 'doy' # time resolution of the data display, it can be 'doy' 'week' or 'month'
@@ -568,6 +557,8 @@ for k in range(len(year_list)):
     # dates to exclude from the images (ex. snowfall days), leave empty for no dates excluded
     date_filter = False # if True exclude the following date list from the analysis
     excl_dates = []
+    
+    # example
     # excl_dates = ["2016-01-04 10:24:32",
     #               "2016-04-19 10:10:32",
     #               "2017-10-24 10:21:11",
