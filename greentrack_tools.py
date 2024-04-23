@@ -35,7 +35,18 @@ from rasterio.enums import Resampling
 #from shapefile import Reader
 import matplotlib.path as mplp
 
-print('PROVA')
+print(
+    """
+    Greentrack  Copyright (C) 2024 Fabio Oriani, Agroscope, Swiss Confederation
+    This program comes with ABSOLUTELY NO WARRANTY under GNU General public 
+    Licence v.3 or later.
+    
+    Please cite the related publication:
+        F. Oriani, H. Aasen, M. K. Schneider
+        Different growth response of mountain rangeland habitats to annual weather fluctuations
+        submitted to Alpine Botany
+    """
+    )
 
 def purge(target_dir, target_pattern): 
     """
