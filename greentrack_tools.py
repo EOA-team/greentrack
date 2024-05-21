@@ -25,7 +25,7 @@ import rasterio
 import shapefile
 from osgeo.gdal import GetDriverByName, GetDataTypeByName
 from osgeo import osr
-import geopandas
+#import geopandas
 import json
 import requests
 from rasterio.warp import reproject, calculate_default_transform
@@ -37,6 +37,8 @@ from rasterio.enums import Resampling
 #import time
 import concurrent.futures
 import threading
+import zarr
+import pandas as pd
 
 print(
     """
@@ -440,7 +442,7 @@ def annual_plot(dates,data,dcol,dlabel,time_res = 'doy',envelope=True,lb=0,rb=0,
     d_list = d_list[fil]
     qm = qm[fil]
     
-    # envelop interpolation
+    # envelope interpolation
     if envelope==True:
         q1 = np.array([],dtype=float)
         q2 = np.array([],dtype=float)
@@ -465,6 +467,89 @@ def annual_plot(dates,data,dcol,dlabel,time_res = 'doy',envelope=True,lb=0,rb=0,
         return d_listm, q2i, qmi, q1i # time, q.25, q.5, q.75
     else:
         return d_listm, qmi # time, q.5
+
+# def annual_px_plot(dates,data,dcol,dlabel,time_res = 'doy',envelope=True,lb=0,rb=0,f_range=[-1,1]):
+#     """
+    
+#     SINGLE PIXEL ANNUAL CURVE PLOT
+#     Generates the interpolated single-pixel or single data series curve for annual data. 
+#     If more values are present with the same dates the median is taken.
+#     The interpolated values are also given as output vectors
+
+#     Parameters
+#     ----------
+#     dates : vector
+#         dates or time vector
+#     data : vector
+#         ndvi or similar values to plot
+#     dcol : string
+#         color string for the plotted curve
+#     dlabel : string
+#         legend label for the curve
+#     time_res : string
+#         time resolution among 'month','week', or 'doy' 
+#     envelope : boolean, optional
+#         if = True the 0.25-0.75 quantile envelope is computed and plotted. 
+#         The default is True.
+#     lb : scalar, optional
+#         left boundary of the interpolated curve at start time. 
+#         The default is 0. If lb = 'data' it is set to data[0]
+#     rb : scalar, optional
+#         right boundary of the interpolated curve at start time. 
+#         The default is 0. If rb = 'data' it is set to data[-1]
+#     f_range: 2-element vector
+#         range outside which the ndvi median value is considered invalid. 
+#         Default is [-1,1], total NDVI range.
+
+#     Returns
+#     -------
+#     d_listm : vector
+#     time vector for the interpolated values
+#     q2i : vector
+#     interpolated 0.25 quantile values
+#     qmi : vector
+#     interpolated median values
+#     q1i : vector
+#     interpolated median values
+
+#     """
+#     d_list = np.unique(dates)
+#     plt.grid(axis='y',linestyle='--')
+    
+#     qm = np.array([],dtype=float)
+#     for d in d_list:
+#         qm = np.hstack((qm,np.nanquantile(data[dates==d],0.5)))
+    
+#     # filter out data with median outside given range
+#     fil = np.logical_and(qm > f_range[0],qm < f_range[1])
+#     d_list = d_list[fil]
+#     qm = qm[fil]
+    
+#     # envelope interpolation
+#     if envelope==True:
+#         q1 = np.array([],dtype=float)
+#         q2 = np.array([],dtype=float)
+#         for d in d_list:
+#             q1 = np.hstack((q1,np.nanquantile(data[dates==d],0.75)))
+#             q2 = np.hstack((q2,np.nanquantile(data[dates==d],0.25)))
+#         d_list1,q1i,*tmp = annual_interp(d_list,q1,time_res=time_res,lb=lb,rb=rb)
+#         d_list2,q2i,*tmp = annual_interp(d_list,q2,time_res=time_res,lb=lb,rb=rb)
+#         q2i_f = np.flip(q2i)
+#         qi = np.hstack((q1i,q2i_f))
+#         d = np.hstack((d_list1,np.flip(d_list1)))
+#         d = d[~np.isnan(qi)]
+#         qi = qi[~np.isnan(qi)]
+#         plt.fill(d,qi,alpha=0.5,c=dcol)
+
+#     # median interpolation
+#     d_listm,qmi,*tmp = annual_interp(d_list,qm,time_res=time_res,lb=lb,rb=rb)
+#     plt.plot(d_listm,qmi,linestyle = '--', c=dcol,markersize=15,label=dlabel)
+#     plt.scatter(d_list,qm,c=dcol)
+    
+#     if envelope == True:     
+#         return d_listm, q2i, qmi, q1i # time, q.25, q.5, q.75
+#     else:
+#         return d_listm, qmi # time, q.5
 
 def auc(dates,data,time_res,envelope=True,sttt=0,entt=365.25):
     """
@@ -566,7 +651,6 @@ def sog(dates,data,time_res,envelope=True,ndvi_th=0.1,pth=5,sttt=0,entt=366):
 
     """
     d_list = np.unique(dates)
-    #plt.grid(axis='y',linestyle='--')
     
     if envelope==True:
         q1 = np.array([],dtype=float)
@@ -1272,7 +1356,7 @@ def rasterize_shp(tx:float,
     xx, yy = np.meshgrid(tx,np.flip(ty),indexing='xy')
     
     # geoseries of grid points
-    s = geopandas.GeoSeries.from_xy(xx.ravel(), yy.ravel(), crs="EPSG:2056")
+    s = gpd.GeoSeries.from_xy(xx.ravel(), yy.ravel(), crs="EPSG:2056")
     
     # preallocate raster
     rast = np.zeros_like(xx)
@@ -1468,3 +1552,111 @@ def write_geotiff(filename,im,xmin,ymax,xres,yres,epsg=None,dtype=None,nodata_va
     # save data
     outdata.FlushCache()
     outdata=None
+
+def init_data_cube(zarr_path,tx,ty,BAND_LIST,res,crs,pid_rast,SIND_NAME):
+    
+    # Create a Zarr group
+    data_cube = zarr.open_group(zarr_path,mode='w') # main group
+    mc = 1000 # memory chunk manually setup where necessary
+
+    # image cube
+    im_sh = (len(ty), len(tx), len(BAND_LIST)+1,0)
+    im = np.empty(im_sh)
+    data_cube.create_dataset('im',
+                             data=im,
+                             shape=im.shape,
+                             dtype=im.dtype)
+    
+    # derived spectral indicator cube
+    sind_sh = (len(ty), len(tx), 0)
+    sind = np.empty(sind_sh)
+    data_cube.create_dataset('sind', 
+                     data=sind, # x, y, time 
+                     shape=sind.shape,
+                     chunks=(1,1,mc), # memory chunk = 1 for x and y because they pixels will be accessed separately)
+                     dtype=sind.dtype) # data type
+    
+    # spectral indicator name
+    data_cube.create_dataset('sind_name', 
+                     data=SIND_NAME, 
+                     dtype='str') # data type
+    
+    # date vector
+    #im_date_sh = (0)
+    im_date = pd.Series(dtype='datetime64[ns]') 
+    data_cube.create_dataset('im_date',
+                         data=im_date.values,  # pass the underlying numpy array
+                         dtype=im_date.values.dtype)  # get the dtype from the numpy array
+
+    # cloud percentage vector
+    im_cloud_perc = pd.Series(dtype='float64') 
+    data_cube.create_dataset('im_cloud_perc', 
+                     data=im_cloud_perc.values,
+                     dtype=im_cloud_perc.dtype) # data type
+    
+    # tx
+    data_cube.create_dataset('tx', 
+                     data=tx, 
+                     #chunks=(mc), # memory chunks
+                     dtype='float') # data type
+    
+    # ty
+    data_cube.create_dataset('ty', 
+                     data=ty, 
+                     #chunks=(mc), # memory chunks
+                     dtype='float') # data type
+    
+    # pid_rast
+    data_cube.create_dataset('pid_rast', 
+                     data=pid_rast,
+                     dtype='int') # data type
+    
+    # bands
+    data_cube.create_dataset('bands', 
+                     data=BAND_LIST,
+                     dtype='str') # data type
+    
+    # res
+    data_cube.create_dataset('res', 
+                     data=res,
+                     dtype='float') # data type
+    
+    # CRS EPSG
+    data_cube.create_dataset('crs', 
+                     data=crs,
+                     dtype='int') # data type
+    
+    # data_cube is automatically saved
+
+
+def append_data_cube(zarr_path,
+         im_date, # dates vector
+         im_cloud_perc, # cloud pecentage vector
+         im,  # images array [x,y,band,scene]
+         sind # indicator array
+         ):
+
+    # Open the Zarr array in append mode
+    z = zarr.open(zarr_path + '/im_date', mode='a')
+    
+    # Append the additional data
+    z.append(im_date.values)
+    
+    # Open the Zarr array in append mode
+    z = zarr.open(zarr_path + '/im_cloud_perc', mode='a')
+    
+    # Append the additional data
+    z.append(im_cloud_perc.values)
+    
+    # Open the Zarr array in append mode
+    z = zarr.open(zarr_path + '/im', mode='a')
+    
+    # Append the additional data
+    z.append(im,axis=3)
+    
+    # Open the Zarr array in append mode
+    z = zarr.open(zarr_path + '/sind', mode='a')
+    
+    # Append the additional data
+    z.append(sind,axis=2)
+    
