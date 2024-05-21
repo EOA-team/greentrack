@@ -317,7 +317,7 @@ for k in range(len(year_list)):
                 if np.any(im!=0): # if any data is non zero
                     
                     im_date = mapper.metadata['sensing_time']
-                    im_cloud_perc = im_cloud_perc
+                    im_cloud_perc = mapper.metadata['cloudy_pixel_percentage']
                     
                     # SAVE multiband image as a .npz file
                     np.savez(data_fname,
