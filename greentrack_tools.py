@@ -23,7 +23,7 @@ import os
 import re
 import rasterio
 import shapefile
-from osgeo.gdal import GetDriverByName, GetDataTypeByName
+#from osgeo.gdal import GetDriverByName, GetDataTypeByName
 from osgeo import osr
 #import geopandas
 import json
@@ -32,6 +32,7 @@ from rasterio.warp import reproject, calculate_default_transform
 from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.enums import Resampling
+from rasterio.transform import from_origin
 #from shapefile import Reader
 #import matplotlib.path as mplp
 #import time
@@ -39,6 +40,11 @@ import concurrent.futures
 import threading
 import zarr
 import pandas as pd
+from tqdm import tqdm
+import multiprocessing
+from functools import partial
+from multiprocessing import shared_memory
+
 
 print(
     """
@@ -83,7 +89,7 @@ def make_grid_vec(shp_path,res):
     """
     MAKE_GRID_VEC
     Generate x, y grid vectors for a given polygon shapefile and wanted resolution.
-    The grid is built upon the polygon bounding box in the shapegile crs.
+    The grid is contained the polygon bounding box and defined in the shapefile crs.
 
     Parameters
     ----------
@@ -102,10 +108,13 @@ def make_grid_vec(shp_path,res):
     """
     
     shp = gpd.read_file(shp_path)
-    lef = np.min(shp.bounds.minx)
-    rig = np.max(shp.bounds.maxx)
-    bot = np.min(shp.bounds.miny)
-    top = np.max(shp.bounds.maxy)
+    
+    # define pixel-center coordinate contained in the bounding box (+-res/2)
+    lef = np.min(shp.bounds.minx) + res/2
+    rig = np.max(shp.bounds.maxx) - res/2
+    bot = np.min(shp.bounds.miny) + res/2
+    top = np.max(shp.bounds.maxy) - res/2
+    
     tx = np.arange(lef, rig, res)
     
     if top < bot:
@@ -468,88 +477,392 @@ def annual_plot(dates,data,dcol,dlabel,time_res = 'doy',envelope=True,lb=0,rb=0,
     else:
         return d_listm, qmi # time, q.5
 
-# def annual_px_plot(dates,data,dcol,dlabel,time_res = 'doy',envelope=True,lb=0,rb=0,f_range=[-1,1]):
-#     """
-    
-#     SINGLE PIXEL ANNUAL CURVE PLOT
-#     Generates the interpolated single-pixel or single data series curve for annual data. 
-#     If more values are present with the same dates the median is taken.
-#     The interpolated values are also given as output vectors
 
-#     Parameters
-#     ----------
-#     dates : vector
-#         dates or time vector
-#     data : vector
-#         ndvi or similar values to plot
-#     dcol : string
-#         color string for the plotted curve
-#     dlabel : string
-#         legend label for the curve
-#     time_res : string
-#         time resolution among 'month','week', or 'doy' 
-#     envelope : boolean, optional
-#         if = True the 0.25-0.75 quantile envelope is computed and plotted. 
-#         The default is True.
-#     lb : scalar, optional
-#         left boundary of the interpolated curve at start time. 
-#         The default is 0. If lb = 'data' it is set to data[0]
-#     rb : scalar, optional
-#         right boundary of the interpolated curve at start time. 
-#         The default is 0. If rb = 'data' it is set to data[-1]
-#     f_range: 2-element vector
-#         range outside which the ndvi median value is considered invalid. 
-#         Default is [-1,1], total NDVI range.
+def annual_px_stats(dates,data,plot=True):
+    
+    if np.all(np.isnan(data)): # if all data is nan
+        
+        return [np.nan]*8 # nan for all output stats    
+    
+    # INDICATOR CURVE: data median time, median data, interp median time, interp median
+    tm,qm,tmi,qmi = annual_px_plot(dates,data,'tab:blue', 'EVI',time_res='doy',f_range=[-0.1,1],plot=plot)
+    
+    # SOG
+    sogm = quick_sog(tmi,qmi,th=0.05,pth=10)
+    
+    # EOS
+    eosm = quick_eos(tmi,qmi,th=0.05,pth=10)
+    
+    if np.isnan(sogm) or np.isnan(eosm): # if sason cannot be detected
+        
+        return [np.nan]*8 # nan for all output stats
+    
+    # LOS
+    if eosm-sogm > 0: # if a season is defined
+        
+        losm = eosm-sogm
+    
+    else:
+        
+        losm = np.nan
+    
+    # OTHERS STATS defined for the SOG-EOS interpolated curve portion
+    
+    # area under the indicator curve from SOG to 
+    aucm = quick_auc(tmi,qmi,sttt=sogm,entt=eosm)
+    
+    # MSG: mean seasonal growth
+    if aucm > 0 and losm > 0:
+        
+        msgm = aucm/losm
+    
+    else:
+        
+        msgm = np.nan
+        
+    # 90th quantile of the curve 
+    p = 0.9
+    q90 = quick_q(tmi, qmi, p, sttt=sogm, entt=eosm)
+    
+    # standard deviation of the green portion
+    stdm = quick_std(tmi, qmi, sttt=sogm, entt=eosm)
+    
+    # indicator growth slope fittend on growing season only (213-th DOY, 1st of Aug)
+    fp,C = curve_fit(gomp,
+                      tmi[:213],
+                      qmi[:213],
+                      maxfev=100000,
+                      bounds = ([0,0,0,0],[2,360,1,1]))
+    
+    sl = fp[2].copy()
+    gom_time = np.arange(0,213)
+    gom_data = gomp(gom_time,*fp)
+    
+    if plot==True:
+        
+        plt.plot(gom_time,gom_data,'--',c='tab:purple',label="Gompertz")
+        
+        plt.plot([eosm,eosm],[-0.1,0.1],'--',c='tab:brown')
+        plt.text(eosm+1,-0.1,s='EOS',c='tab:brown',rotation = 'vertical')
+        
+        plt.plot([sogm,sogm],[-0.1,0.1],'--',c='tab:blue')
+        plt.text(sogm+1,-0.1,s='SOG',c='tab:blue',rotation = 'vertical')
+        
+        plt.text(tmi[180],qmi[180]/2,s='AUC = ' + str(aucm)[:5],c='tab:blue')
+        
+        plt.plot([sogm,eosm],[q90,q90],'--',c='tab:orange')
+        plt.text(sogm+10,q90+0.05,s='q90',c='tab:orange')
+        
+        # graph cosmetics
+        plt.ylim([-0.15,1.1])
+        plt.xlabel('Day of the year (DOY)')
+        plt.ylabel('Spectral indicators [-1,1]')
+        plt.legend(loc='upper right',prop={'size': 11})
+        plt.grid(axis='y',linestyle='--',alpha=0.5)
+        plt.grid(axis='x',linestyle='--',alpha=0.5)
+        plt.tight_layout()
+    
+    return sogm, eosm, losm, aucm, msgm, sl, q90, stdm
 
-#     Returns
-#     -------
-#     d_listm : vector
-#     time vector for the interpolated values
-#     q2i : vector
-#     interpolated 0.25 quantile values
-#     qmi : vector
-#     interpolated median values
-#     q1i : vector
-#     interpolated median values
+def annual_px_plot(dates,data,dcol,dlabel,time_res = 'doy',lb=0,rb=0,f_range=[-1,1],plot=True):
+    """
 
-#     """
-#     d_list = np.unique(dates)
-#     plt.grid(axis='y',linestyle='--')
-    
-#     qm = np.array([],dtype=float)
-#     for d in d_list:
-#         qm = np.hstack((qm,np.nanquantile(data[dates==d],0.5)))
-    
-#     # filter out data with median outside given range
-#     fil = np.logical_and(qm > f_range[0],qm < f_range[1])
-#     d_list = d_list[fil]
-#     qm = qm[fil]
-    
-#     # envelope interpolation
-#     if envelope==True:
-#         q1 = np.array([],dtype=float)
-#         q2 = np.array([],dtype=float)
-#         for d in d_list:
-#             q1 = np.hstack((q1,np.nanquantile(data[dates==d],0.75)))
-#             q2 = np.hstack((q2,np.nanquantile(data[dates==d],0.25)))
-#         d_list1,q1i,*tmp = annual_interp(d_list,q1,time_res=time_res,lb=lb,rb=rb)
-#         d_list2,q2i,*tmp = annual_interp(d_list,q2,time_res=time_res,lb=lb,rb=rb)
-#         q2i_f = np.flip(q2i)
-#         qi = np.hstack((q1i,q2i_f))
-#         d = np.hstack((d_list1,np.flip(d_list1)))
-#         d = d[~np.isnan(qi)]
-#         qi = qi[~np.isnan(qi)]
-#         plt.fill(d,qi,alpha=0.5,c=dcol)
+    SINGLE PIXEL ANNUAL CURVE PLOT
+    Generates the interpolated single-pixel or single data series curve for annual data. 
+    If more values are present with the same dates the median is taken.
+    The interpolated values are also given as output vectors
 
-#     # median interpolation
-#     d_listm,qmi,*tmp = annual_interp(d_list,qm,time_res=time_res,lb=lb,rb=rb)
-#     plt.plot(d_listm,qmi,linestyle = '--', c=dcol,markersize=15,label=dlabel)
-#     plt.scatter(d_list,qm,c=dcol)
+    Parameters
+    ----------
+    dates : vector
+        dates or time vector
+    data : vector
+        ndvi or similar values to plot
+    dcol : string
+        color string for the plotted curve
+    dlabel : string
+        legend label for the curve
+    time_res : string
+        time resolution among 'month','week', or 'doy' 
+    lb : scalar, optional
+        left boundary of the interpolated curve at start time. 
+        The default is 0. If lb = 'data' it is set to data[0]
+    rb : scalar, optional
+        right boundary of the interpolated curve at start time. 
+        The default is 0. If rb = 'data' it is set to data[-1]
+    f_range: 2-element vector
+        range outside which the ndvi median value is considered invalid. 
+        Default is [-1,1], total NDVI range.
+    plot: boolean
+        wsith to generate the plot.
+
+    Returns
+    -------
+    d_listm : vector
+    time vector for the interpolated values
+    qmi : vector
+    interpolated median values
     
-#     if envelope == True:     
-#         return d_listm, q2i, qmi, q1i # time, q.25, q.5, q.75
-#     else:
-#         return d_listm, qmi # time, q.5
+    """
+    
+    # generate data vectors
+    d_list = np.unique(dates)
+    qm = np.array([],dtype=float)
+    
+    for d in d_list:
+        
+        data_tmp = data[dates==d]
+        
+        if np.all(np.isnan(data_tmp)):
+            
+            qm = np.hstack((qm,np.nan))
+                           
+        else:
+            
+            qm = np.hstack((qm,np.nanquantile(data[dates==d],0.5)))
+    
+    # filter out data with median outside given range
+    fil = np.logical_and(qm > f_range[0],qm < f_range[1])
+    d_list = d_list[fil]
+    qm = qm[fil]
+    
+    # median interpolation
+    d_listm,qmi,*tmp = annual_interp(d_list,qm,time_res=time_res,lb=lb,rb=rb)
+    
+    if plot==True:
+        plt.grid(axis='y',linestyle='--')
+        plt.plot(d_listm,qmi,linestyle = '--', c=dcol,markersize=15,label=dlabel)
+        plt.scatter(d_list,qm,c=dcol)
+    
+    return d_list, qm, d_listm, qmi # data time, median data, interp time, interp median
+
+def quick_eos(tmi,qmi,th=0.1,pth=5,sttt=213,entt=365):
+    """
+    QUICK EOS (End Of Season)
+    Computes the season end for given interpolated annual data and an NDVI 
+    threshold considered the end of the greening season. 
+    
+    Parameters
+    ----------
+    tmi : vector
+        doy time vector
+    qmi : vector
+        interpolated data vector
+    th : scalar
+        indicator threshold below which the browning time is reached. Default is 0.1
+    pth : scalar
+        number of time steps for which ndvi_th has to be passed in order to 
+        define the brwning time. Default is 5 
+    sttt : scalar, optional
+        starting time for the interpolation. The default is 213 (half of season).
+    entt : scalar, optional
+        ending time for the interpolation. The default is 366 (end of year).
+
+    Returns
+    -------
+    EOS for the given median annual curve
+
+    """
+    
+    # extract curve portion
+    st_ind = np.argwhere(tmi==sttt)[0][0]
+    en_ind = np.argwhere(tmi==entt)[0][0]
+    tmi_tmp = tmi[st_ind:en_ind]
+    qmi_tmp = qmi[st_ind:en_ind]
+    
+    # compute eos
+    gsw = False
+    n = 0
+    egm = np.nan
+    for i in range(len(tmi_tmp)):
+        
+        if n==pth: 
+        
+            break
+        
+        elif qmi_tmp[i]<th and gsw==False:
+        
+            egm = tmi_tmp[i]
+            gsw = True
+            n = n+1
+            
+        elif qmi_tmp[i]<th and gsw==True:
+            
+            n = n+1
+            
+        elif  qmi_tmp[i]>=th:
+            
+            egm = entt
+            #egm = np.nan
+            gsw = False
+            n = 0
+ 
+    return egm # 0.5 quantile browning time
+
+def quick_sog(tmi,qmi,th=0.1,pth=5,sttt=0,entt=213):
+    """
+    QUICK SOG (Start Of Greening)
+    Computes the season end for given interpolated annual data and an NDVI 
+    threshold considered the end of the greening season. 
+    
+    Parameters
+    ----------
+    tmi : vector
+        doy time vector
+    qmi : vector
+        interpolated data vector
+    th : scalar
+        indicator threshold below which the browning time is reached. Default is 0.1
+    pth : scalar
+        number of time steps for which ndvi_th has to be passed in order to 
+        define the brwning time. Default is 5 
+    sttt : scalar, optional
+        starting time for the interpolation. The default is 213 (half of season).
+    entt : scalar, optional
+        ending time for the interpolation. The default is 366 (end of year).
+
+    Returns
+    -------
+    SOG for the given median annual curve
+
+    """
+    
+    # extract curve portion
+    st_ind = np.argwhere(tmi==sttt)[0][0]
+    en_ind = np.argwhere(tmi==entt)[0][0]
+    tmi_tmp = tmi[st_ind:en_ind]
+    qmi_tmp = qmi[st_ind:en_ind]
+    
+    # compute sog    
+    gsw = False
+    n = 0
+    egm = np.nan
+    
+    for i in range(len(tmi_tmp)):
+    
+        if n==pth:
+            
+            break
+        
+        elif qmi_tmp[i]>th and gsw==False:
+            
+            egm = tmi_tmp[i]
+            gsw = True
+            n = n+1
+            
+        elif qmi_tmp[i]>th and gsw==True:
+            
+            n = n+1
+            
+        elif  qmi_tmp[i]<=th:
+            
+            egm = np.nan
+            gsw = False
+            n = 0
+        
+    return egm # 0.5 quantile greening time
+
+def quick_auc(tmi,qmi,sttt=0,entt=365):
+    """
+    AUC
+    Computes the Area under the curve (AUC) for given interpolated annual curve. 
+    
+    Parameters
+    ----------
+    tmi : vector
+        doy time vector
+    qmi : vector
+        interpolated data vector
+    sttt : scalar, optional
+        starting time for the interpolation. The default is 0.
+    entt : scalar, optional
+        ending time for the interpolation. The default is 365.25.
+
+    Returns
+    -------
+    qsum : scalar
+    AUC of the annual curve
+
+    """
+    
+    # extract curve portion
+    st_ind = np.argwhere(tmi==sttt)[0][0]
+    en_ind = np.argwhere(tmi==entt)[0][0]
+    qmi_tmp = qmi[st_ind:en_ind]
+    
+    # auc
+    qmsum = np.cumsum(qmi_tmp)[-1]
+
+    return qmsum # auc
+
+def quick_q(tmi,qmi,p,sttt=0,entt=365):
+    """
+    QUICK QUANTILE
+    Computes the p-th quantile for a given interpolated annual curve. 
+    
+    Parameters
+    ----------
+    tmi : vector
+        doy time vector
+    qmi : vector
+        interpolated data vector
+    p:
+        value of the quantile, defined in [0,1].
+        ex. q = 0.25 is the first quartile
+    sttt : scalar, optional
+        starting time for the interpolation. The default is 0.
+    entt : scalar, optional
+        ending time for the interpolation. The default is 365.25.
+
+    Returns
+    -------
+    q : scalar
+    p-th quantile of the annual curve
+
+    """
+    
+    # extract curve portion
+    st_ind = np.argwhere(tmi==sttt)[0][0]
+    en_ind = np.argwhere(tmi==entt)[0][0]
+    qmi_tmp = qmi[st_ind:en_ind]
+    
+    # quantile
+    q = np.quantile(qmi_tmp,p)
+
+    return q 
+
+def quick_std(tmi,qmi,sttt=0,entt=365):
+    """
+    QUICK STANDARD DEVIATION
+    Computes the standard deviation for a given interpolated annual curve. 
+    
+    Parameters
+    ----------
+    tmi : vector
+        doy time vector
+    qmi : vector
+        interpolated data vector
+    sttt : scalar, optional
+        starting time for the interpolation. The default is 0.
+    entt : scalar, optional
+        ending time for the interpolation. The default is 365.25.
+
+    Returns
+    -------
+    stdm : scalar
+    stadard deviation of the selected annual curve portion
+
+    """
+    
+    # extract curve portion
+    st_ind = np.argwhere(tmi==sttt)[0][0]
+    en_ind = np.argwhere(tmi==entt)[0][0]
+    qmi_tmp = qmi[st_ind:en_ind]
+    
+    # quantile
+    stdm = np.std(qmi_tmp)
+
+    return stdm 
 
 def auc(dates,data,time_res,envelope=True,sttt=0,entt=365.25):
     """
@@ -609,6 +922,7 @@ def auc(dates,data,time_res,envelope=True,sttt=0,entt=365.25):
         return q2sum, qmsum, q1sum # q25, qm,q75
     else:
         return qmsum # qm
+
 
 def sog(dates,data,time_res,envelope=True,ndvi_th=0.1,pth=5,sttt=0,entt=366):
     """
@@ -886,7 +1200,7 @@ def greening_max(dates,data,envelope=True,sttt=0,entt=213,time_res='doy',plot=Fa
     else:
         return fpm[3] # 0.5 quantile greening slipe
 
-def eos(dates,data,time_res,envelope=True,ndvi_th=0.1,pth=5,sttt=213,entt=366):
+def eos(dates,data,time_res,envelope=True,ndvi_th=0.1,pth=5,sttt=213,entt=365):
     """
     EOS (End Of Season)
     Computes the season end for given NDVI annual data and an NDVI 
@@ -1227,7 +1541,7 @@ def download_SA3D_STAC(
     )
     
 
-def write_bbox_from_tiff(fpath,out_base_path):
+def write_bbox(fpath,out_base_path):
     """
     Generates a bounding-box shapefile form a given geotiff / shp / gpkg file.
 
@@ -1284,6 +1598,26 @@ def write_bbox_from_tiff(fpath,out_base_path):
     file = open(out_base_path + '.prj', 'w')
     file.write(spatialRef.ExportToWkt())
     file.close()
+
+def write_bbox_from_shp(fpath,out_base_path):
+    """
+    Generates a bounding-box shapefile form a given geotiff / shp / gpkg file.
+
+    Parameters
+    ----------
+    fpath : str
+        original tif, shp, or gpkg file
+    out_base_path : str
+        Shapefile output base path (with no extensions, since multiple related
+                                    fiels are generated)
+
+    Returns
+    -------
+    None.
+    
+    """
+    
+    
 
 def rasterize_shp(tx:float,
                   ty:float,
@@ -1361,25 +1695,25 @@ def rasterize_shp(tx:float,
     # preallocate raster
     rast = np.zeros_like(xx)
     rast[:] = no_data
-    
-    # find grid points contained into every geometry
-    
+        
     # Create a lock to synchronize multi-thread access to the matrix
     lock = threading.Lock()
+    progress_bar = tqdm(total=len(gdf))
     
-    def rast_poly(geom,s,rast,fi_re,lock,i):
+    def rast_poly(geom,s,rast,fi_re,lock,i,progress_bar):
         
         ind = np.array(geom[i].contains(s))
         
         with lock:
             rast.ravel()[ind] = fi_re[i] # assign corresponding filed value
-    
+            progress_bar.update(1)
+            
     items = np.arange(len(gdf.geometry))
     
     # Create a ThreadPoolExecutor with a maximum of 4 worker threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=njobs) as executor:
         # Submit each item in the list to the executor
-        futures = [executor.submit(rast_poly, gdf.geometry, s, rast, fi_re, lock,i) for i in items]
+        futures = [executor.submit(rast_poly, gdf.geometry, s, rast, fi_re, lock,i,progress_bar) for i in items]
         
         # Wait for all futures to complete
         concurrent.futures.wait(futures)
@@ -1512,52 +1846,111 @@ def rasterize_shp(tx:float,
     
     return rast
 
-def write_geotiff(filename,im,xmin,ymax,xres,yres,epsg=None,dtype=None,nodata_val=None,band_name=None):
+# def write_geotiff(output_path,array,x_origin,y_origin,pixel_size,epsg=None,dtype=None,nodata_val=None,band_name=None):
     
-    # nodata_val, band_name should be lists/array even if containing one value
-    if dtype==None: # set data type from given format
-        dtype=im.dtype.name
-    if np.ndim(im)<3:
-        nb=1
-        im=im[:,:,None]
-    else:
-        nb=np.shape(im)[2]
+    # # nodata_val, band_name should be lists/array even if containing one value
+    # if dtype==None: # set data type from given format
+    #     dtype=im.dtype.name
+    # if np.ndim(im)<3:
+    #     nb=1
+    #     im=im[:,:,None]
+    # else:
+    #     nb=np.shape(im)[2]
     
-    driver =  GetDriverByName('GTiff') # generate driver    
-    outdata = driver.Create(filename, np.shape(im)[1], np.shape(im)[0], nb, GetDataTypeByName(dtype))
-    for i in range(nb): # write data
-        if dtype!=None:
-            outdata.GetRasterBand(i+1).WriteArray(im[:,:,i].astype(dtype))
-        else:
-            outdata.GetRasterBand(i+1).WriteArray(im[:,:,i])
+    # driver =  GetDriverByName('GTiff') # generate driver    
+    # outdata = driver.Create(filename, np.shape(im)[1], np.shape(im)[0], nb, GetDataTypeByName(dtype))
+    # for i in range(nb): # write data
+    #     if dtype!=None:
+    #         outdata.GetRasterBand(i+1).WriteArray(im[:,:,i].astype(dtype))
+    #     else:
+    #         outdata.GetRasterBand(i+1).WriteArray(im[:,:,i])
             
-        if nodata_val!=None:
-            outdata.GetRasterBand(i+1).SetNoDataValue(nodata_val)
+    #     if nodata_val!=None:
+    #         outdata.GetRasterBand(i+1).SetNoDataValue(nodata_val)
         
-        if band_name!=None:
-            outdata.GetRasterBand(i+1).SetDescription(band_name[i])
+    #     if band_name!=None:
+    #         outdata.GetRasterBand(i+1).SetDescription(band_name[i])
         
-    # GEOREFERENTIATION
-     # coords
-    geotransform = (xmin, # x-coordinate of the upper-left corner of the upper-left pixel.
-                    xres, # W-E pixel resolution / pixel width.
-                    0, #row rotation (typically zero).
-                    ymax, # y-coordinate of the upper-left corner of the upper-left pixel.
-                    0, # column rotation (typically zero).
-                    -yres) # N-S pixel resolution / pixel height (negative value for a north-up image).
-    outdata.SetGeoTransform(geotransform)    # specify coords
-    srs = osr.SpatialReference()            # establish encoding
-    srs.ImportFromEPSG(epsg)                # set CRS from EPSG code 
-    outdata.SetProjection(srs.ExportToWkt())
-    # save data
-    outdata.FlushCache()
-    outdata=None
+    # # GEOREFERENTIATION
+    #  # coords
+    # geotransform = (xmin, # x-coordinate of the upper-left corner of the upper-left pixel.
+    #                 xres, # W-E pixel resolution / pixel width.
+    #                 0, #row rotation (typically zero).
+    #                 ymax, # y-coordinate of the upper-left corner of the upper-left pixel.
+    #                 0, # column rotation (typically zero).
+    #                 -yres) # N-S pixel resolution / pixel height (negative value for a north-up image).
+    # outdata.SetGeoTransform(geotransform)    # specify coords
+    # srs = osr.SpatialReference()            # establish encoding
+    # srs.ImportFromEPSG(epsg)                # set CRS from EPSG code 
+    # outdata.SetProjection(srs.ExportToWkt())
+    # # save data
+    # outdata.FlushCache()
+    # outdata=None
+    
+def write_geotiff(out_path,array,x_origin,y_origin,pixel_size,epsg,band_names,nodata_val=None):
+    """
+    Write N-D array to geotiff.
 
-def init_data_cube(zarr_path,tx,ty,BAND_LIST,res,crs,pid_rast,SIND_NAME):
+    Parameters
+    ----------
+    out_path : str
+        path of the out geotiff file to create.
+    array : numerical
+        2-D or 3-D array, where bands are stacked in the 3rd dimension.
+    x_origin : float
+        x-coord of the upper left corner of the upper left pixel.
+    y_origin : float
+        y-coord of the upper left corner of the upper left pixel..
+    pixel_size : float
+        pixel size
+    epsg : str
+        EPSG code of the CRS liked to the array coordinates
+    band_names : list of str
+        list of names to give to each band.
+    nodata_val : type, optional
+        nodata value present for missing data in the array. The default is None
+
+    Returns
+    -------
+    None.
+
+    """
+    
+    # Create the transform object
+    transform = from_origin(x_origin, y_origin, pixel_size, pixel_size)
+    
+    # Define the coordinate reference system (CRS) for the GeoTIFF
+    crs = 'EPSG:' + epsg  # WGS84
+
+    
+    if array.ndim==2:
+        
+        array = np.expand_dims(array, axis=2)
+        
+        
+    nbands = array.shape[2]
+    
+    # Write the array to a GeoTIFF file
+    with rasterio.open(
+        out_path, 'w',
+        driver='GTiff',
+        height=array.shape[0],
+        width=array.shape[1],
+        count=nbands,  # Number of bands
+        dtype=array.dtype,
+        crs=crs,
+        transform=transform
+    ) as dst:
+        
+        for i in range(nbands):
+            dst.write(np.squeeze(array[:, :, i]), i + 1)  # Write each band separately
+            dst.set_band_description(i + 1, band_names[i])  # Set band name
+
+def init_data_cube(zarr_path,tx,ty,BAND_LIST,res,crs,pid_rast,SIND_NAME,chunk_size=10):
     
     # Create a Zarr group
     data_cube = zarr.open_group(zarr_path,mode='w') # main group
-    mc = 1000 # memory chunk manually setup where necessary
+    mc = 50 # memory chunk manually setup where necessary
 
     # image cube
     im_sh = (len(ty), len(tx), len(BAND_LIST)+1,0)
@@ -1573,7 +1966,7 @@ def init_data_cube(zarr_path,tx,ty,BAND_LIST,res,crs,pid_rast,SIND_NAME):
     data_cube.create_dataset('sind', 
                      data=sind, # x, y, time 
                      shape=sind.shape,
-                     chunks=(1,1,mc), # memory chunk = 1 for x and y because they pixels will be accessed separately)
+                     chunks=(chunk_size,chunk_size,1,mc), # memory chunk = 1 for x and y because they pixels will be accessed separately)
                      dtype=sind.dtype) # data type
     
     # spectral indicator name
@@ -1659,4 +2052,76 @@ def append_data_cube(zarr_path,
     
     # Append the additional data
     z.append(sind,axis=2)
+
+def _proc_chunk(chunk_coords, time_vec, shm_name, shape):
+    """Process a chunk of the array to compute cumulative sums."""
+    existing_shm = shared_memory.SharedMemory(name=shm_name)
+    data_cube_shared = np.ndarray(shape, dtype='float', buffer=existing_shm.buf)
+
+    (i_start, i_end), (j_start, j_end) = chunk_coords
+    evi_chunk = data_cube_shared[i_start:i_end, j_start:j_end, :]
+    auc_chunk = np.full((i_end - i_start, j_end - j_start), np.nan, dtype='float32')
+
+    for i in range(evi_chunk.shape[0]):
+        for j in range(evi_chunk.shape[1]):
+            pixel_data = evi_chunk[i, j, :]
+            if not np.all(np.isnan(pixel_data)):
+                
+                sogm, eosm, losm, aucm, msgm, sl, q90, stdm = annual_px_stats(time_vec,
+                                                                            # EVI[i,j,:],
+                                                                            pixel_data,
+                                                                            plot=False)                
+                auc_chunk[i, j] = aucm  # Example operation
+                
+    existing_shm.close()
+    return (i_start, i_end), (j_start, j_end), auc_chunk
+
+def _update_progress(result, progress_bar, auc_rast, chunk_npix):
+    """Callback function to update shared state with the result of _proc_chunk."""
+    (i_start, i_end), (j_start, j_end), auc_chunk = result
+    auc_rast[i_start:i_end, j_start:j_end] = auc_chunk.copy()
+    progress_bar.update(chunk_npix)
+
+def indicator_map(data_cube, time_vec, njobs, chunk_size):
+    
+    # pixel amount per chunk
+    chunk_npix = chunk_size * chunk_size
+
+    # preallocate output raster
+    auc_rast = zarr.create(shape=data_cube.shape[:2], dtype='float32', chunks=(chunk_size, chunk_size), fill_value=np.nan)
+
+    # Define chunk coordinates, handle boundary conditions
+    nrows, ncols = auc_rast.shape
+    total_chunks = (nrows // chunk_size + (1 if nrows % chunk_size != 0 else 0)) * (ncols // chunk_size + (1 if ncols % chunk_size != 0 else 0))    
+    chunk_coords = [
+        ((i, min(i + chunk_size, nrows)), (j, min(j + chunk_size, ncols)))
+        for i in range(0, nrows, chunk_size)
+        for j in range(0, ncols, chunk_size)
+    ]
+
+    # Create shared memory for data_cube
+    shm = shared_memory.SharedMemory(create=True, size=data_cube.nbytes)
+    data_cube_shared = np.ndarray(data_cube.shape, dtype=data_cube.dtype, buffer=shm.buf)
+    np.copyto(data_cube_shared, data_cube)
+
+    # Parallel loop
+    with tqdm(total=total_chunks * chunk_npix) as progress_bar:
+        _update_progress_with_bar = partial(_update_progress, progress_bar=progress_bar, auc_rast=auc_rast, chunk_npix=chunk_npix)
+        
+        with multiprocessing.Pool(processes=njobs) as pool:
+            # Submit tasks to the pool
+            results = [
+                pool.apply_async(_proc_chunk, args=(coords, time_vec, shm.name, data_cube.shape), callback=_update_progress_with_bar)
+                for coords in chunk_coords
+            ]
+            
+            # Ensure all tasks are completed
+            for r in results:
+                r.wait()
+
+    # Clean up shared memory
+    shm.close()
+    shm.unlink()
+
+    return auc_rast  # raster map
     
