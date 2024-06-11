@@ -111,15 +111,17 @@ def make_grid_vec(shp_path,res):
     
     # define pixel-center coordinate contained in the bounding box (+-res/2)
     lef = np.min(shp.bounds.minx) + res/2
-    rig = np.max(shp.bounds.maxx) - res/2
-    bot = np.min(shp.bounds.miny) + res/2
-    top = np.max(shp.bounds.maxy) - res/2
-    
+    rig = np.max(shp.bounds.maxx) - res/2  
     tx = np.arange(lef, rig, res)
+    
+    bot = np.min(shp.bounds.miny)
+    top = np.max(shp.bounds.maxy) 
     
     if top < bot:
         res = -res
         
+    bot = bot + res/2
+    top = top - res/2 
     ty = np.arange(bot, top, res)
     
     return tx, ty
@@ -1966,7 +1968,7 @@ def init_data_cube(zarr_path,tx,ty,BAND_LIST,res,crs,pid_rast,SIND_NAME,chunk_si
     data_cube.create_dataset('sind', 
                      data=sind, # x, y, time 
                      shape=sind.shape,
-                     chunks=(chunk_size,chunk_size,1,mc), # memory chunk = 1 for x and y because they pixels will be accessed separately)
+                     chunks=(chunk_size,chunk_size,mc), # memory chunk = 1 for x and y because they pixels will be accessed separately)
                      dtype=sind.dtype) # data type
     
     # spectral indicator name
@@ -2082,7 +2084,31 @@ def _update_progress(result, progress_bar, auc_rast, chunk_npix):
     auc_rast[i_start:i_end, j_start:j_end] = auc_chunk.copy()
     progress_bar.update(chunk_npix)
 
-def indicator_map(data_cube, time_vec, njobs, chunk_size):
+def indicator_map(data_cube, time_vec, njobs=1, chunk_size=10):
+    """
+    INDICATOR_MAP creates an indicator map from a given annual curves cube. 
+    Used in greentrack_map
+    
+    Parameters
+    ----------
+    data_cube : zarr array
+        data cube of dimensionality (x,y,DOY) with vegetation index values.
+        every pixel present an annual curve for every DOY. 
+    time_vec : array
+        array of DOYs of the same size of np.shape(data_cube)[2].
+    njobs : int
+        number of threads used in the parallel computation. Defauklt is 1 
+        (linear computation).
+    chunk_size : int
+        number of pixels per size of chunk processed and stored. memory will be 
+        organized in chunks of size chunk_size x chunk_size.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
     
     # pixel amount per chunk
     chunk_npix = chunk_size * chunk_size
