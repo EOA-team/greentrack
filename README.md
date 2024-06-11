@@ -9,6 +9,8 @@ The tools section also contain general-purpose functions for vector and raster d
   <li> greentrack_tools: collection of related functions (see the function help for more info) </li>
   <li> greentrack_script: download the Sentinel-2 images and generate the growth curves </li>
   <li> greentrack_interactive: after having run greentrack_script, this scrupt allows visualizing clickable growth curves and related images interactively </li>
+  <li> greentrack_map: script to compute the Area Under the EVI annual curve (AUC) for every single pixel and generate a map  </li>
+	
 </ul> 
 
 ### Dependences

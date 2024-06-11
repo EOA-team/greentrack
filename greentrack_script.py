@@ -38,7 +38,7 @@ Settings.USE_STAC = True
 SITE_NAME = 'test' # base name for output files and folder
 
 # shapefile path of the ROI (.gpkg or .shp)
-shp_path = 'data/parcels__posieux_5.gpkg'
+shp_path = '/home/orianif/GEO/software/greentrack/data/parcels__posieux_5.gpkg'
 bbox_fname = shp_path
 
 # list  of years you want the data for, can also contain one year
@@ -312,7 +312,7 @@ for k in range(len(year_list)):
             if not mapper.data.empty:
                 
                 # project scenes on the target grid
-                im = gtt.scene_to_array(mapper.data,tx,ty)
+                im = gtt.scene_to_array(mapper.data,tx,ty,mask=mask)
 
                 if np.any(im!=0): # if any data is non zero
                     
