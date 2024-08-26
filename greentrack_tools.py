@@ -1668,7 +1668,7 @@ def rasterize_shp(tx:float,
     gdf = gpd.read_file(shp_path)
     
     # not necessary to explode, present geometries will be rasterized in form
-    # polygon or multipolygon. Explode would create double indexes for geometry
+    # polygon or multipolygon. Explode would create double-level indexes for geometry
     # parts.
     
     # # Step 2: Explode MultiPart geometries
