@@ -56,9 +56,9 @@ print(
     Licence v.3 or later.
     
     Please cite the related publication:
-        F. Oriani, H. Aasen, M. K. Schneider
-        Different growth response of mountain rangeland habitats to annual 
-        weather fluctuations, submitted to Alpine Botany.
+    Oriani, F., Aasen, H. & Schneider, M.K. Different growth response 
+    of mountain rangeland habitats to inter-annual weather fluctuations. 
+    Alp Botany (2025). https://doi.org/10.1007/s00035-025-00327-1
     """
     )
 
@@ -1335,7 +1335,7 @@ def gomp(x,a,b,c,d):
     """
     GOMPERTZ
     1D sigmoidal function of the form:
-        y = a(exp(-b*exp(c*x))+d
+        y = -a(exp(-exp(b-x)c)+d
 
         
     Parameters
