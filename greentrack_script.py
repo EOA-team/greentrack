@@ -156,7 +156,7 @@ if  len(poly) > 1:
      bbox_fname = 'data/dissolved.shp'
     
 # mask for original polygons to apply later
-mask = gtt.rasterize_shp(tx,ty,shp_path,'1',no_data=0)
+mask = gtt.rasterize_shp(tx,ty,shp_path,'1',no_data=0, njobs = 1, target_crs=poly.crs.to_epsg())
     
     
 #%% LOOP OVER YEARS
